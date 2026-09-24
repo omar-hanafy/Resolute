@@ -1,0 +1,269 @@
+# Resolute — design
+
+Date: 2026-09-25
+Status: accepted for implementation under the owner's standing goal (no interactive
+review; assumptions are listed below so they can be corrected later)
+
+## Understanding
+
+**What was asked.** RDM (the menu-bar resolution switcher at `clones/RDM`, a fork of
+`avibrazil/RDM` via `usr-sse2/RDM`) is abandoned. Build our own replacement from the
+ground up, make it support macOS 27, verify that it works, and publish it as a
+**private** GitHub repository under the `omar-hanafy` account (switching `gh` to that
+account). It becomes public after the owner has tested it.
+
+**Assumptions (not stated by the owner).**
+
+- The product keeps RDM's reason to exist: one-click access to *every* display mode,
+  including the 1× and "hidden" modes that System Settings does not offer, plus RDM's
+  custom HiDPI resolution editor and its command-line mode.
+- New name: **Resolute** (repo `omar-hanafy/Resolute`, bundle id
+  `com.omarhanafy.Resolute`, CLI `resolute`). Easy to rename before going public.
+- The project lives next to RDM at `clones/Resolute`.
+- Commits use the identity the owner uses for personal repos
+  (`Omar Khaled <omar_hanafy@icloud.com>`), set locally in this repository only.
+- Minimum OS is macOS 14 (Sonoma) so modern AppKit/SwiftUI APIs are available;
+  macOS 27 on Apple silicon is the verified target.
+
+**Success criteria.**
+
+1. Builds from a clean checkout with `swift build` / `make app` on Xcode 27.
+2. On this Mac (MacBook Pro M2 Pro, macOS 27.0) it lists the built-in display's modes
+   with correct sizes, scales and refresh rates, and switches modes through both the
+   public and the private path.
+3. Automated tests cover the pure logic (mode decoding, grouping, menu model, override
+   file codec, CLI parsing) and run green; live tests prove the system integration.
+4. The app bundle launches as a menu-bar agent and its menu renders from live data.
+5. Pushed to a private repository under `omar-hanafy`.
+
+## Why RDM no longer works on macOS 27 (evidence)
+
+Measured on this Mac (macOS 27.0, build 26A428, M2 Pro, built-in Liquid Retina XDR):
+
+- The private SkyLight functions RDM uses still exist:
+  `CGSGetNumberOfDisplayModes`, `CGSGetDisplayModeDescriptionOfLength`,
+  `CGSGetCurrentDisplayMode`, `CGSConfigureDisplayMode`.
+- The 0xD4-byte mode record **changed layout**. RDM reads the refresh rate as a
+  `uint16` at 0xBC; on macOS 27 the `uint32` at 0xBC is a 16.16 fixed-point rate, so RDM
+  sees `0` for integer rates and garbage for fractional ones (61603 for 59.94 Hz, 62259
+  for 47.95 Hz). RDM's "pick the highest refresh rate" logic therefore selects
+  47.95 Hz whenever a resolution is chosen, and its refresh-rate menu disappears.
+- RDM maps `depth == 4` to 32-bit colour; macOS 27 reports `8` (10-bit
+  `--RRRRRRRRRRGGGGGGGGGGBBBBBBBBBB`), so every mode is labelled 16-bit.
+- `IODisplayConnect` services do not exist on Apple silicon, so RDM's display-name
+  lookup returns nothing (the owner's override file has `DisplayProductName = ""`).
+
+Verified macOS 27 record layout (all 132 modes cross-checked against the public API,
+0 mismatches):
+
+| Offset | Type | Meaning |
+|---|---|---|
+| 0x00 | u32 | index in the private mode list (argument to `CGSConfigureDisplayMode`) |
+| 0x04 | u32 | IO mode flags (private variant) |
+| 0x08 / 0x0C | u32 | width / height in points |
+| 0x10 | u32 | depth code (8 = 30-bit) |
+| 0x14 | u32 | bytes per row |
+| 0x18 / 0x1C / 0x20 | u32 | bits per pixel / bits per sample / samples per pixel |
+| 0x24 | u32 | integer refresh rate (truncated) |
+| 0x30 | char[64] | IO pixel encoding string |
+| 0xB8 | u32 | record size marker (= 0xD4) |
+| 0xBC | u32 | refresh rate, 16.16 fixed point |
+| 0xC0 | u32 | IO flags (same value as `CGDisplayModeGetIOFlags`) |
+| 0xC4 | u32 | IO display mode ID (same as `CGDisplayModeGetIODisplayModeID`) |
+| 0xC8 / 0xCC | u32 | pixel width / pixel height |
+| 0xD0 | f32 | scale (density) |
+
+## Approaches considered
+
+**Project shape**
+
+1. **Swift package + bundling script (chosen).** One `Package.swift` with a core
+   library, a CLI and an AppKit/SwiftUI app target; a script assembles and ad-hoc signs
+   `Resolute.app`. Reproducible from the command line, testable with `swift test`,
+   no `.pbxproj` to maintain.
+2. Xcode project like RDM. Familiar, but the project file is opaque to review and to
+   generate, and CLI-driven verification is clumsier.
+3. Patch RDM in place. Fastest, but the owner asked for a ground-up rebuild, and RDM's
+   Objective-C++/storyboard structure is where most of its bugs live.
+
+**Mode discovery**
+
+1. **Public API first, private API as a validated extra (chosen).**
+   `CGDisplayCopyAllDisplayModes` with `kCGDisplayShowDuplicateLowResolutionModes`
+   supplies documented, switchable modes. The private list is decoded and
+   cross-checked against it at runtime; only when every overlapping record agrees is
+   the private decoder trusted, and only then are private-only ("hidden") modes shown.
+   A future layout change degrades to public-only instead of showing garbage.
+2. Private API only (RDM). Breaks silently when the layout changes — exactly today's
+   failure.
+3. Public API only. Safe, but loses modes macOS hides, which is RDM's purpose.
+
+## Scope
+
+In:
+
+- Menu-bar agent: per display, current resolution and refresh rate; resolution submenu
+  sectioned into HiDPI / Low Resolution (1×) / Hidden; refresh-rate submenu; Default and
+  Native badges; mirroring toggle (two or more displays); Custom Resolutions editor;
+  Show Low-Resolution Modes and Launch at Login toggles; About; Quit.
+- Holding ⌥ while opening the menu reveals hidden modes and mode IDs.
+- Hidden (private-only) modes are applied for the session first with a 15-second
+  "Keep / Revert" countdown, then made permanent on Keep; a black screen reverts itself.
+- Custom Resolutions editor for display override plists in
+  `/Library/Displays/Contents/Resources/Overrides`, with backup, admin-authorised
+  writes, and removal.
+- `resolute` CLI: `displays`, `modes`, `set`, `mirror`, `overrides list|show|add|remove|reset`,
+  JSON output for scripting.
+- Build, install and uninstall scripts; generated app icon; README; MIT licence.
+
+Out (YAGNI): RDM's `Icons.plist` preview-icon editor, HDR/brightness control, virtual
+displays, EDID overrides, auto-update, notarisation (needs a Developer ID; the build
+script signs ad hoc), CI (would spend private-repo macOS minutes; add when public).
+
+## Architecture
+
+```
+Package.swift                (swift-tools 6.0, macOS 14+, Swift 6 language mode)
+Sources/
+  ResoluteKit/               library — no UI
+    Model/        Display, DisplayMode, ModeCatalog (grouping), ModeQuery (CLI matching),
+                  MenuModel (pure menu tree), AspectRatio
+    System/       SystemDisplayService (CoreGraphics), SkyLight (dlsym bridge),
+                  PrivateModeRecord (pure decoder + validator), DisplayNames,
+                  Mirroring, ConfigurationScope
+    Overrides/    ScaleResolution (entry codec), DisplayOverride (plist model),
+                  OverrideLocations, OverrideStore (read/scan), OverrideInstaller
+                  (write/remove through a CommandRunner), Backups
+  resolute/                  CLI (swift-argument-parser)
+  ResoluteApp/               AppKit menu-bar app + SwiftUI editor window
+Tests/ResoluteKitTests/      Swift Testing; fixtures captured from this Mac
+Resources/                   Info.plist template, AppIcon.icns
+Scripts/                     build-app.sh, install.sh, uninstall.sh, make-icon.swift
+Makefile                     build / test / app / install / uninstall / clean
+```
+
+### Units and their contracts
+
+- **`DisplayMode`** (value, `Sendable`, `Codable`): `modeID` (IO display mode ID),
+  `privateIndex?`, point size, pixel size, `refreshRate`, `bitsPerSample?`, `ioFlags`,
+  `origin` (`.system` or `.hidden`). Derived: `scale`, `isHiDPI`, `isDefault`
+  (flag 0x4), `isNative` (flag 0x0200_0000).
+- **`Display`** (value): `id`, `name`, vendor/product/serial, `isBuiltin`, `isMain`,
+  mirror state, `currentModeID`, `modes`, `privateModesTrusted`.
+- **`PrivateModeRecord`**: decodes one 0xD4 record from raw bytes (pure, fixture-tested).
+  `PrivateModeValidator` compares decoded records with public modes and answers
+  "trusted?" plus the hidden extras.
+- **`SkyLight`**: resolves the four private functions with `dlsym`; returns `nil` when
+  any is missing. Allocates 0x100 zeroed bytes per record, requests 0xD4.
+- **`SystemDisplayService`** (`DisplayControlling` protocol): `displays()` snapshot;
+  `apply(modeID:to:scope:)` using `CGConfigureDisplayWithDisplayMode` for system modes
+  and `CGSConfigureDisplayMode(privateIndex)` for hidden ones inside a
+  `CGBeginDisplayConfiguration` transaction; `setMirroring(_:)` with
+  `CGConfigureDisplayMirrorOfDisplay`. Scope maps to
+  `.permanently` / `.forSession` / `.forAppOnly`.
+- **`ModeCatalog`** (pure): groups modes by (points, pixels); per group picks the mode
+  to apply — current refresh rate if offered, else the highest; prefers the current bit
+  depth and system origin. Produces resolution sections and refresh options.
+- **`MenuModel`** (pure): builds the whole menu as a tree of nodes with titles, badges,
+  check states and typed actions from `[Display]` + settings + "option key held".
+  The app renders it to `NSMenu`; `Resolute --dump-menu` prints it.
+- **`ModeQuery`** (pure): parses `1920x1080`, `1920x1080@2x`, `@60`, `--refresh`,
+  `--scale`, `--mode-id` and picks the best matching mode or explains why none match.
+- **Override files**: `ScaleResolution` decodes each `scale-resolutions` entry:
+  8 bytes → standard (pixels); 16 bytes with bit 0 of word 2 → HiDPI (pixels, shown as
+  points = pixels / 2, flags kept); anything else (12/9-byte, non-HiDPI 16-byte,
+  non-data) → preserved verbatim, shown read-only. 8-byte entries equal to a 16-byte
+  HiDPI entry's backing size are treated as its auto-managed counterpart (RDM
+  behaviour). Encoding writes standard entries, then counterparts, then HiDPI entries,
+  then preserved entries, each group sorted by width then height, descending. New
+  HiDPI entries use flags `0x00000009 / 0x00A00000` (Apple's most common HiDPI
+  combination). Unknown top-level keys are preserved; empty product names are omitted
+  instead of written as `""`; `target-default-ppmm` defaults to 10.01 as RDM did.
+  Golden test: the owner's existing RDM-written file round-trips unchanged.
+- **`OverrideInstaller`**: writes the plist to a private temp file, then runs one shell
+  script (`mkdir -p`, `cp`, `chmod 644`, `chown root:wheel` when root) through a
+  `CommandRunner`: `AdminCommandRunner` (`osascript … with administrator privileges`,
+  off the main thread; user cancel is not an error), or `ShellCommandRunner`
+  (`/bin/sh`, used when already root and by tests against a temp root). Every path is
+  single-quote escaped. Existing files are copied to
+  `~/Library/Application Support/Resolute/Backups/` first.
+
+### App
+
+- `main.swift` starts `NSApplication` with `.accessory` activation policy
+  (`LSUIElement` in the bundle as well).
+- `StatusMenuController` owns the `NSStatusItem` (SF Symbol `display`, template) and
+  rebuilds the menu in `menuNeedsUpdate(_:)`, so it is always current; a CoreGraphics
+  reconfiguration callback refreshes open editor windows.
+- Mode changes run through `ModeChangeCoordinator` (hidden modes: session scope +
+  countdown; others: permanent).
+- `LoginItem` wraps `SMAppService.mainApp`.
+- `OverrideEditorWindow`: SwiftUI in an `NSWindow`; sidebar of connected displays and
+  existing overrides; table of custom resolutions with add/edit sheet (width, height,
+  HiDPI, aspect-ratio helper, advanced flags); Save (admin prompt), Revert, Remove
+  Override, Reveal in Finder. A banner explains that changes apply after reconnecting
+  the display or restarting, and that Apple silicon Macs may ignore custom scaled
+  resolutions for some displays.
+- Diagnostics: `--dump-menu` prints the live menu tree; `--render-editor <png>` renders
+  the editor offscreen (verification without opening windows on the owner's screen).
+
+### CLI
+
+```
+resolute displays [--json]
+resolute modes [-d <display>] [--all] [--raw] [--json]
+resolute set [<WxH>] [--scale <n>] [--refresh <hz>] [--mode-id <id>] [--default]
+             [-d <display>] [--session] [--allow-hidden]
+resolute mirror on|off|toggle
+resolute overrides list [--json]
+resolute overrides show   (-d <display> | --vendor <hex> --product <hex>) [--json]
+resolute overrides add    <WxH> [--standard] [--flags <hex>] (target) [--root <dir>]
+resolute overrides remove <WxH> (target) [--root <dir>]
+resolute overrides reset  (target) [--root <dir>]
+```
+
+Display selectors: `main`, a list index, `id:<number>`, or part of the name.
+Write commands need root (run with `sudo`) unless `--root` points at a staging
+directory.
+
+## Error handling
+
+- Typed `ResoluteError` cases: display not found / ambiguous, mode not found (with the
+  closest alternatives), CoreGraphics error (named, not just a number), private API
+  unavailable, override file unreadable, command failed (with stderr), cancelled.
+- CLI: message on stderr, non-zero exit code. App: `NSAlert`; cancellation is silent.
+- Private API absence or distrust is not an error: hidden modes are simply not shown
+  (`resolute modes --all` says why).
+
+## Testing and verification
+
+- Unit (Swift Testing): record decoding and validation from fixtures captured on this
+  Mac, grouping and representative-mode choice, menu tree, CLI query parsing and
+  matching, override codec (including Apple's system file variants and the owner's
+  real file), installer script construction and quoting, aspect ratios, revert
+  countdown.
+- Integration (opt-in `RESOLUTE_LIVE_TESTS=1`): enumerate real displays, check that the
+  private decoder is trusted and agrees with the public API, apply a refresh-rate change
+  with `.forAppOnly` scope and restore it, run the installer for real against a
+  temporary root through `/bin/sh`.
+- End to end: build the bundle, verify its signature, run the CLI (`displays`, `modes`,
+  `set` a refresh rate for the session and back, `overrides list/show` against the real
+  `/Library` file, `overrides add/remove --root <tmp>`), run `--dump-menu`, render the
+  editor to PNG and inspect it, launch the agent and confirm it stays running.
+- Owner-facing constraint: the owner may be watching full-screen video, so live tests
+  change only the refresh rate, never the resolution, and always restore it.
+
+## Publishing
+
+`gh auth switch --user omar-hanafy`, then
+`gh repo create omar-hanafy/Resolute --private --source . --push`.
+Commit messages describe the change only (no tool attribution).
+
+## Risks
+
+- Private API layout may change again → runtime validation falls back to public-only.
+- Custom scaled resolutions may be ignored on Apple silicon; they could not be verified
+  on this Mac without an external display and a restart. The file format is verified
+  against Apple's files and the owner's existing RDM file; the UI states the caveat.
+- `SMAppService` with an ad-hoc signature may require approval in System Settings; the
+  app surfaces the status instead of failing silently.
