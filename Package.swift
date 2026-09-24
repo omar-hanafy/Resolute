@@ -6,9 +6,20 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "ResoluteKit", targets: ["ResoluteKit"]),
+        .executable(name: "resolute", targets: ["resolute"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
     ],
     targets: [
         .target(name: "ResoluteKit"),
+        .executableTarget(
+            name: "resolute",
+            dependencies: [
+                "ResoluteKit",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ]
+        ),
         .testTarget(
             name: "ResoluteKitTests",
             dependencies: ["ResoluteKit"],
