@@ -10,7 +10,7 @@ struct CustomResolutionsView: View {
         // sizes itself to the table's ideal height and pushes content out of the window.
         HStack(spacing: 0) {
             TargetList(model: model)
-                .frame(width: 240)
+                .frame(width: 270)
             Divider()
             Group {
                 if model.draft != nil {
