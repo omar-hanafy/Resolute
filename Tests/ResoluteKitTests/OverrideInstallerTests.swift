@@ -42,6 +42,21 @@ import Testing
         #expect(backup.lastPathComponent == "DisplayProductID-3401-20260921-141320.plist")
     }
 
+    @Test func keepsEveryBackupMadeWithinOneSecond() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = installer(at: root)  // its clock never moves
+        let original = DisplayOverride(key: key, resolutions: [.standard(width: 1920, height: 1080)])
+        try await installer.install(original)
+        try await installer.install(DisplayOverride(key: key, resolutions: [.standard(width: 2560, height: 1440)]))
+        try await installer.install(DisplayOverride(key: key, resolutions: [.standard(width: 3840, height: 2160)]))
+        let folder = installer.locations.backupRoot.appending(path: key.vendorDirectoryName)
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false)).sorted()
+        #expect(backups == ["DisplayProductID-3401-20260921-141320-2.plist", "DisplayProductID-3401-20260921-141320.plist"])
+        let first = try DisplayOverride(key: key, propertyList: Data(contentsOf: folder.appending(path: backups[1])))
+        #expect(first.resolutions == original.resolutions)
+    }
+
     @Test func removesTheOverrideAndItsEmptyFolder() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -50,7 +65,9 @@ import Testing
         try await installer.remove(key)
         #expect(!exists(url))
         #expect(!exists(url.deletingLastPathComponent()))
-        #expect(exists(installer.backupFile(for: key)))
+        let folder = installer.locations.backupRoot.appending(path: key.vendorDirectoryName)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false))
+            == ["DisplayProductID-3401-20260921-141320.plist"])
     }
 
     @Test func removingAMissingOverrideSucceeds() async throws {

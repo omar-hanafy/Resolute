@@ -34,10 +34,18 @@ public struct OverrideInstaller: Sendable {
         try await runner.run(Self.removeScript(destination: locations.userFile(for: key), backup: backupFile(for: key)))
     }
 
+    /// The next unused backup file for `key`: a timestamp, plus a counter when several
+    /// backups are made within the same second.
     func backupFile(for key: OverrideKey) -> URL {
-        locations.backupRoot
-            .appending(path: key.vendorDirectoryName, directoryHint: .isDirectory)
-            .appending(path: "\(key.productFileName)-\(Self.timestamp(now())).plist")
+        let folder = locations.backupRoot.appending(path: key.vendorDirectoryName, directoryHint: .isDirectory)
+        let stem = "\(key.productFileName)-\(Self.timestamp(now()))"
+        var candidate = folder.appending(path: "\(stem).plist")
+        var counter = 2
+        while FileManager.default.fileExists(atPath: candidate.path(percentEncoded: false)) {
+            candidate = folder.appending(path: "\(stem)-\(counter).plist")
+            counter += 1
+        }
+        return candidate
     }
 
     static func timestamp(_ date: Date) -> String {
