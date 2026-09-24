@@ -6,7 +6,7 @@ if let status = Diagnostics.run(CommandLine.arguments) {
 }
 
 let application = NSApplication.shared
-let editor = CustomResolutionsWindowController(model: CustomResolutionsModel(service: SystemDisplayService()))
-application.setActivationPolicy(.regular)
-editor.show(selecting: nil)
+let delegate = AppDelegate()
+application.delegate = delegate
+application.setActivationPolicy(.accessory)
 application.run()
