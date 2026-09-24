@@ -2206,7 +2206,7 @@ import Testing
 
         let detailed = try #require(item(
             MenuModel.build(displays: [fullHD], settings: MenuSettings(showsDetails: true)),
-            titled: "1920 × 1080"
+            titled: "1920 × 1080  #1"
         )?.submenu)
         #expect(detailed.contains(.header("Hidden")))
         let hidden = try #require(item(detailed, titled: "2560 × 1440  #91"))
