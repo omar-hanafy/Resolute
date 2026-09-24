@@ -133,7 +133,7 @@ Sources/
                   Mirroring, ConfigurationScope
     Overrides/    ScaleResolution (entry codec), DisplayOverride (plist model),
                   OverrideLocations, OverrideStore (read/scan), OverrideInstaller
-                  (write/remove through a CommandRunner), Backups
+                  (write/remove/back up through a CommandRunning), OverrideDraft
   resolute/                  CLI (swift-argument-parser)
   ResoluteApp/               AppKit menu-bar app + SwiftUI editor window
 Tests/ResoluteKitTests/      Swift Testing; fixtures captured from this Mac
@@ -149,7 +149,8 @@ Makefile                     build / test / app / install / uninstall / clean
   `origin` (`.system` or `.hidden`). Derived: `scale`, `isHiDPI`, `isDefault`
   (flag 0x4), `isNative` (flag 0x0200_0000).
 - **`Display`** (value): `id`, `name`, vendor/product/serial, `isBuiltin`, `isMain`,
-  mirror state, `currentModeID`, `modes`, `privateModesTrusted`.
+  mirror state, `currentModeID`, `modes`, `privateModes` (trusted / untrusted with a
+  reason / unavailable).
 - **`PrivateModeRecord`**: decodes one 0xD4 record from raw bytes (pure, fixture-tested).
   `PrivateModeValidator` compares decoded records with public modes and answers
   "trusted?" plus the hidden extras.
@@ -181,20 +182,21 @@ Makefile                     build / test / app / install / uninstall / clean
   instead of written as `""`; `target-default-ppmm` defaults to 10.01 as RDM did.
   Golden test: the owner's existing RDM-written file round-trips unchanged.
 - **`OverrideInstaller`**: writes the plist to a private temp file, then runs one shell
-  script (`mkdir -p`, `cp`, `chmod 644`, `chown root:wheel` when root) through a
-  `CommandRunner`: `AdminCommandRunner` (`osascript … with administrator privileges`,
-  off the main thread; user cancel is not an error), or `ShellCommandRunner`
-  (`/bin/sh`, used when already root and by tests against a temp root). Every path is
-  single-quote escaped. Existing files are copied to
-  `~/Library/Application Support/Resolute/Backups/` first.
+  script (back up, `mkdir -p`, `cp`, `chmod 644`; files created as root stay owned by
+  root) through a `CommandRunning`: `AdminCommandRunner` (`osascript … with
+  administrator privileges`, off the main thread; user cancel is not an error), or
+  `ShellCommandRunner` (`/bin/sh`, used under `sudo` and by tests against a temp root).
+  Every path is single-quote escaped. The same script first copies an existing file to
+  `/Library/Application Support/Resolute/Backups/`, so the app and `sudo resolute` keep
+  backups in one place.
 
 ### App
 
 - `main.swift` starts `NSApplication` with `.accessory` activation policy
   (`LSUIElement` in the bundle as well).
 - `StatusMenuController` owns the `NSStatusItem` (SF Symbol `display`, template) and
-  rebuilds the menu in `menuNeedsUpdate(_:)`, so it is always current; a CoreGraphics
-  reconfiguration callback refreshes open editor windows.
+  rebuilds the menu in `menuNeedsUpdate(_:)`, so it is always current; the screen-parameters
+  change notification refreshes an open editor window.
 - Mode changes run through `ModeChangeCoordinator` (hidden modes: session scope +
   countdown; others: permanent).
 - `LoginItem` wraps `SMAppService.mainApp`.
