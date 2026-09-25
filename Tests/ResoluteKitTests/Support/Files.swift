@@ -1,4 +1,5 @@
 import Foundation
+@testable import ResoluteKit
 
 /// A fresh temporary directory. Its name contains a space and a single quote, so every
 /// test that writes files also checks path quoting.
@@ -35,3 +36,36 @@ let rdmOverrideXML = """
 </dict>
 </plist>
 """
+
+/// Collects the scripts an installer asks to run, without running them.
+actor ScriptRecorder {
+    private(set) var scripts: [String] = []
+
+    func record(_ script: String) {
+        scripts.append(script)
+    }
+}
+
+struct RecordingRunner: CommandRunning {
+    let recorder: ScriptRecorder
+
+    func run(_ script: String) async throws {
+        await recorder.record(script)
+    }
+}
+
+/// Runs scripts with /bin/sh under `umask 077`, as a strict `sudo` setup would.
+struct StrictUmaskRunner: CommandRunning {
+    func run(_ script: String) async throws {
+        try await ShellCommandRunner().run("umask 077; " + script)
+    }
+}
+
+/// Runs scripts through `osascript` without administrator rights: the app's own path,
+/// minus the password prompt.
+struct UnprivilegedAppleScriptRunner: CommandRunning {
+    func run(_ script: String) async throws {
+        let source = AppleScript.doShellScript(script, withAdministratorPrivileges: false)
+        try Subprocess.run("/usr/bin/osascript", arguments: ["-e", source])
+    }
+}

@@ -17,14 +17,14 @@ public struct OverrideInstaller: Sendable {
     }
 
     /// Writes `override` to its file and returns the file's location.
+    ///
+    /// The file's contents travel inside the script, so the privileged script never
+    /// reads a file that another process running as the user could swap.
     @discardableResult
     public func install(_ override: DisplayOverride) async throws -> URL {
-        let staging = FileManager.default.temporaryDirectory.appending(path: "Resolute-\(UUID().uuidString).plist")
-        try override.propertyListData().write(to: staging)
-        defer { try? FileManager.default.removeItem(at: staging) }
         let destination = locations.userFile(for: override.key)
         try await runner.run(Self.installScript(
-            staging: staging, destination: destination, backup: backupFile(for: override.key)
+            contents: try override.propertyListData(), destination: destination, backup: backupFile(for: override.key)
         ))
         return destination
     }
@@ -56,14 +56,22 @@ public struct OverrideInstaller: Sendable {
         return formatter.string(from: date)
     }
 
-    static func installScript(staging: URL, destination: URL, backup: URL) -> String {
+    static func installScript(contents: Data, destination: URL, backup: URL) -> String {
         let file = Shell.quote(destination.path(percentEncoded: false))
+        let folder = destination.deletingLastPathComponent().path(percentEncoded: false)
+        let template = folder + (folder.hasSuffix("/") ? "" : "/") + ".resolute.XXXXXX"
         return [
             "set -e",
+            // WindowServer must be able to read what root writes, whatever umask sudo passes on.
+            "umask 022",
             backupCommand(file: file, backup: backup),
-            "mkdir -p \(Shell.quote(destination.deletingLastPathComponent().path(percentEncoded: false)))",
-            "cp \(Shell.quote(staging.path(percentEncoded: false))) \(file)",
-            "chmod 644 \(file)",
+            "mkdir -p \(Shell.quote(folder))",
+            // Written beside the destination and renamed over it, so the file appears whole.
+            "incoming=$(mktemp \(Shell.quote(template)))",
+            "trap 'rm -f \"$incoming\"' EXIT",
+            "printf '%s' \(Shell.quote(contents.base64EncodedString())) | /usr/bin/base64 -D > \"$incoming\"",
+            "chmod 644 \"$incoming\"",
+            "mv -f \"$incoming\" \(file)",
         ].joined(separator: "; ")
     }
 
@@ -72,6 +80,7 @@ public struct OverrideInstaller: Sendable {
         let folder = Shell.quote(destination.deletingLastPathComponent().path(percentEncoded: false))
         return [
             "set -e",
+            "umask 022",
             backupCommand(file: file, backup: backup),
             "rm -f \(file)",
             "rmdir \(folder) 2>/dev/null || true",

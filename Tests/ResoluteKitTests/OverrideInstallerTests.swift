@@ -15,6 +15,30 @@ import Testing
         FileManager.default.fileExists(atPath: url.path(percentEncoded: false))
     }
 
+    @Test func neverAsksRootToReadAFileTheUserCanSwap() async throws {
+        let recorder = ScriptRecorder()
+        let installer = OverrideInstaller(runner: RecordingRunner(recorder: recorder))
+        let override = DisplayOverride(key: key, resolutions: [.hiDPI(width: 2560, height: 1080, flags: .standard)])
+        try await installer.install(override)
+        let script = try #require(await recorder.scripts.first)
+        let userTemporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path(percentEncoded: false)
+        #expect(!script.contains(FileManager.default.temporaryDirectory.path(percentEncoded: false)))
+        #expect(!script.contains(userTemporary))
+        #expect(script.contains(try override.propertyListData().base64EncodedString()))
+    }
+
+    @Test func writesReadableFilesUnderAStrictUmask() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let date = fixedDate
+        let installer = OverrideInstaller(locations: .staged(at: root), runner: StrictUmaskRunner(), now: { date })
+        let url = try await installer.install(DisplayOverride(key: key, resolutions: [.standard(width: 1920, height: 1080)]))
+        let folder = try FileManager.default.attributesOfItem(atPath: url.deletingLastPathComponent().path(percentEncoded: false))
+        let file = try FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false))
+        #expect((folder[.posixPermissions] as? NSNumber)?.intValue == 0o755)
+        #expect((file[.posixPermissions] as? NSNumber)?.intValue == 0o644)
+    }
+
     @Test func handlesPathsWithQuotesAndSpaces() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -26,6 +50,24 @@ import Testing
         #expect(stored?.resolutions == override.resolutions)
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false))
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o644)
+    }
+
+    @Test func installsThroughAppleScript() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let date = fixedDate
+        let installer = OverrideInstaller(locations: .staged(at: root), runner: UnprivilegedAppleScriptRunner(), now: { date })
+        let override = DisplayOverride(key: key, productName: "Studio \"27\"", resolutions: [.hiDPI(width: 2560, height: 1080, flags: .standard)])
+        try await installer.install(override)
+        try await installer.install(override)  // replaces the file and backs it up
+        let stored = try #require(try OverrideStore(locations: installer.locations).installedOverride(for: key))
+        #expect(stored.productName == "Studio \"27\"")
+        #expect(stored.resolutions == override.resolutions)
+        #expect(stored.otherKeys.keys == ["target-default-ppmm"])
+        let backups = installer.locations.backupRoot.appending(path: key.vendorDirectoryName)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: backups.path(percentEncoded: false)).count == 1)
+        try await installer.remove(key)
+        #expect(try OverrideStore(locations: installer.locations).installedOverride(for: key) == nil)
     }
 
     @Test func backsUpTheFileItReplaces() async throws {
@@ -90,16 +132,19 @@ import Testing
 
     @Test func buildsTheScriptItDescribes() {
         let script = OverrideInstaller.installScript(
-            staging: URL(filePath: "/tmp/a b.plist"),
+            contents: Data("hi".utf8),
             destination: URL(filePath: "/L/DisplayVendorID-1/DisplayProductID-2"),
             backup: URL(filePath: "/B/DisplayVendorID-1/DisplayProductID-2-x.plist")
         )
-        #expect(script == "set -e; "
+        #expect(script == "set -e; umask 022; "
             + "if [ -f '/L/DisplayVendorID-1/DisplayProductID-2' ]; then mkdir -p '/B/DisplayVendorID-1/'; "
             + "cp -p '/L/DisplayVendorID-1/DisplayProductID-2' '/B/DisplayVendorID-1/DisplayProductID-2-x.plist'; fi; "
             + "mkdir -p '/L/DisplayVendorID-1/'; "
-            + "cp '/tmp/a b.plist' '/L/DisplayVendorID-1/DisplayProductID-2'; "
-            + "chmod 644 '/L/DisplayVendorID-1/DisplayProductID-2'")
+            + "incoming=$(mktemp '/L/DisplayVendorID-1/.resolute.XXXXXX'); "
+            + "trap 'rm -f \"$incoming\"' EXIT; "
+            + "printf '%s' 'aGk=' | /usr/bin/base64 -D > \"$incoming\"; "
+            + "chmod 644 \"$incoming\"; "
+            + "mv -f \"$incoming\" '/L/DisplayVendorID-1/DisplayProductID-2'")
         #expect(OverrideInstaller.timestamp(fixedDate) == "20260921-141320")
     }
 }
