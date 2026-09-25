@@ -459,7 +459,7 @@ final class CustomResolutionsModel {
         for entry in entries {
             guard let pixels = entry.pixelSize else { continue }
             // One too large to add stays named in the note.
-            try? draft?.add(.standard(width: pixels.width, height: pixels.height))
+            _ = try? draft?.add(.standard(width: pixels.width, height: pixels.height))
         }
     }
 
