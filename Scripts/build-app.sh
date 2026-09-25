@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Builds dist/Resolute.app and dist/resolute as universal binaries, signed ad hoc.
+# Builds dist/Resolute.app and dist/resolute as universal binaries.
 #   UNIVERSAL=0 Scripts/build-app.sh    # this Mac's architecture only (faster)
+#   SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" Scripts/build-app.sh
+# SIGN_IDENTITY defaults to "-" (ad hoc, local use only). A real identity also turns on
+# the hardened runtime and, only for a "Developer ID Application" identity, an Apple
+# timestamp (other identities' signatures can't be timestamped by Apple's server).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -8,6 +12,7 @@ VERSION="$(sed -n 's/.*static let string = "\(.*\)".*/\1/p' Sources/ResoluteKit/
 BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 ARCHS=(--arch arm64 --arch x86_64)
 [[ "${UNIVERSAL:-1}" == "0" ]] && ARCHS=()
+SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 
 swift build -c release ${ARCHS[@]+"${ARCHS[@]}"}
 BIN="$(swift build -c release ${ARCHS[@]+"${ARCHS[@]}"} --show-bin-path)"
@@ -30,9 +35,23 @@ for binary in "$APP/Contents/MacOS/Resolute" "$APP/Contents/Helpers/resolute"; d
   mv "$binary.stamped" "$binary"
 done
 
-codesign --force --sign - --identifier com.omarhanafy.Resolute.cli "$APP/Contents/Helpers/resolute"
-codesign --force --sign - "$APP"
+# Ad hoc signing (the default) never leaves this Mac, so it gets neither the hardened
+# runtime nor a timestamp. Neither binary needs entitlements: the app calls SkyLight via
+# dlsym on system frameworks and runs /usr/bin/osascript as a subprocess.
+CODESIGN_FLAGS=()
+if [[ "$SIGN_IDENTITY" != "-" ]]; then
+  CODESIGN_FLAGS+=(--options runtime)
+  case "$SIGN_IDENTITY" in
+    "Developer ID Application:"*) CODESIGN_FLAGS+=(--timestamp) ;;
+    *) CODESIGN_FLAGS+=(--timestamp=none) ;;
+  esac
+fi
+
+codesign --force --sign "$SIGN_IDENTITY" ${CODESIGN_FLAGS[@]+"${CODESIGN_FLAGS[@]}"} \
+  --identifier com.omarhanafy.Resolute.cli "$APP/Contents/Helpers/resolute"
+codesign --force --sign "$SIGN_IDENTITY" ${CODESIGN_FLAGS[@]+"${CODESIGN_FLAGS[@]}"} "$APP"
+codesign --verify --strict "$APP/Contents/Helpers/resolute"
 codesign --verify --strict "$APP"
 cp "$APP/Contents/Helpers/resolute" dist/resolute
 
-echo "Built $APP and dist/resolute (version $VERSION, build $BUILD)"
+echo "Built $APP and dist/resolute (version $VERSION, build $BUILD), signed with: $SIGN_IDENTITY"
