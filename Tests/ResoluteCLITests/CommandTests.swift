@@ -141,6 +141,21 @@ import Testing
             == "Error: DELL P2419H did not switch to that mode, so it was left as it was. The display may not support the mode.")
     }
 
+    /// --session says how long a confirmed mode lasts; it must not skip the confirmation
+    /// that brings back a picture when the display cannot show a hidden mode.
+    @Test func stillAsksAboutAHiddenModeForTheSession() async throws {
+        let reverted = FakeDisplays([Sample.monitor])
+        try await resolute(["set", "--mode-id", "90", "--allow-hidden", "--session", "-d", "dell"], service: reverted)
+        #expect(reverted.changes.last == .init(displayID: 2, modeID: 1, scope: .session))
+
+        let kept = FakeDisplays([Sample.monitor])
+        let transcript = try await resolute(
+            ["set", "--mode-id", "90", "--allow-hidden", "--session", "-d", "dell"], service: kept, decision: .keep
+        )
+        #expect(kept.changes == [.init(displayID: 2, modeID: 90, scope: .session)])
+        #expect(transcript.output.hasSuffix("(until you log out)"))
+    }
+
     @Test func asksBeforeUsingAHiddenMode() async throws {
         let result = await failure(["set", "2560x1440", "-d", "dell"], service: FakeDisplays([Sample.monitor]))
         #expect(result?.message == "Error: 2560 × 1440 is a hidden mode that macOS does not list. Pass --allow-hidden to use it.")

@@ -109,11 +109,14 @@ struct SetCommand: ParsableCommand, ContextCommand {
             context.write("Would switch \(display.name) to \(Output.describe(mode)).")
             return
         }
-        // Hidden modes are tried for the session and kept only when confirmed.
+        // Hidden modes are tried for the session and kept only when confirmed; --session
+        // only limits how long a confirmed mode lasts.
         let trial = session || mode.origin == .hidden
         let switcher = ModeSwitcher(service: service)
         let outcome = try switcher.apply(modeID: mode.modeID, to: display.id, trial: trial) {
-            session ? .keepForSession : context.confirmHiddenMode()
+            guard mode.origin == .hidden else { return .keepForSession }
+            let decision = context.confirmHiddenMode()
+            return session && decision == .keep ? .keepForSession : decision
         }
         switch outcome {
         case .alreadyCurrent:
