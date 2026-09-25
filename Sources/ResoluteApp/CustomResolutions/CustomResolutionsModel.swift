@@ -176,11 +176,8 @@ final class CustomResolutionsModel {
     // MARK: - Editing
 
     /// Adds an entry; returns a message when it is not valid.
-    func add(width: Int, height: Int, hiDPI: Bool, flags: HiDPIFlags) -> String? {
+    func add(_ entry: ScaleResolution) -> String? {
         guard !isWorking else { return "Wait until the save finishes." }
-        let entry: ScaleResolution = hiDPI
-            ? .hiDPI(width: width, height: height, flags: flags)
-            : .standard(width: width, height: height)
         do {
             try draft?.add(entry)
             return nil

@@ -61,11 +61,12 @@ struct AddResolutionSheet: View {
 
     private var explanation: String {
         guard let size = ResolutionInput.size(width: widthText, height: heightText) else {
-            return "Enter a width and a height in whole numbers."
+            return ResolutionInput.sizeHint
         }
-        return hiDPI
-            ? "Looks like \(size.width) × \(size.height). macOS renders \(size.width * 2) × \(size.height * 2) pixels and scales them to the panel."
-            : "\(size.width) × \(size.height) pixels, drawn at 1×."
+        guard hiDPI else { return "\(size.width) × \(size.height) pixels, drawn at 1×." }
+        let pixels = "\(size.width * 2) × \(size.height * 2)"
+        return "Looks like \(size.width) × \(size.height). macOS renders \(pixels) pixels and scales them to the panel. "
+            + "A 1× entry at \(pixels) is added with it, unless the list already has one."
     }
 
     private func applyRatio() {
@@ -74,13 +75,9 @@ struct AddResolutionSheet: View {
     }
 
     private func add() {
-        guard let size = ResolutionInput.size(width: widthText, height: heightText) else {
-            error = "Enter a width and a height in whole numbers."
-            return
-        }
         do {
-            let flags = try HiDPIFlags(parsing: flagsText)
-            if let message = model.add(width: size.width, height: size.height, hiDPI: hiDPI, flags: flags) {
+            let entry = try ResolutionInput.entry(width: widthText, height: heightText, hiDPI: hiDPI, flags: flagsText)
+            if let message = model.add(entry) {
                 error = message
             } else {
                 dismiss()
@@ -91,8 +88,20 @@ struct AddResolutionSheet: View {
     }
 }
 
-/// Reads the size typed into the Add Resolution sheet.
+/// Reads what was typed into the Add Resolution sheet.
 enum ResolutionInput {
+    static let sizeHint = "Enter a width and a height in whole numbers."
+
+    /// The entry the sheet describes. The flags are read only for a HiDPI entry: the field
+    /// is hidden for 1× ones, and whatever was left in it must not stop them being added.
+    static func entry(width: String, height: String, hiDPI: Bool, flags: String) throws -> ScaleResolution {
+        guard let size = size(width: width, height: height) else {
+            throw ResoluteError.invalidEntry(sizeHint)
+        }
+        guard hiDPI else { return .standard(width: size.width, height: size.height) }
+        return .hiDPI(width: size.width, height: size.height, flags: try HiDPIFlags(parsing: flags))
+    }
+
     static func size(width: String, height: String) -> (width: Int, height: Int)? {
         let sizes = 1...ModeQuery.maximumDimension
         guard let width = Int(width.trimmingCharacters(in: .whitespaces)),

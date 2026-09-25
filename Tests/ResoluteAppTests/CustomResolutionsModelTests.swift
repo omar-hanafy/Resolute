@@ -83,7 +83,7 @@ struct GatedRunner: CommandRunning {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let model = makeModel(root: root, displays: StubDisplays([first, second]))
-        #expect(model.add(width: 1920, height: 1080, hiDPI: true, flags: .standard) == nil)
+        #expect(model.add(.hiDPI(width: 1920, height: 1080, flags: .standard)) == nil)
         model.requestSelection(OverrideKey(display: second))
         #expect(model.selection == OverrideKey(display: first))
         #expect(model.pendingSelection == OverrideKey(display: second))
@@ -103,7 +103,7 @@ struct GatedRunner: CommandRunning {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let model = makeModel(root: root, displays: StubDisplays([first, second]))
-        _ = model.add(width: 1920, height: 1080, hiDPI: true, flags: .standard)
+        _ = model.add(.hiDPI(width: 1920, height: 1080, flags: .standard))
         model.select(displayID: second.id)
         #expect(model.selection == OverrideKey(display: first))
         #expect(model.pendingSelection == OverrideKey(display: second))
@@ -114,7 +114,7 @@ struct GatedRunner: CommandRunning {
         defer { try? FileManager.default.removeItem(at: root) }
         let displays = StubDisplays([first, second])
         let model = makeModel(root: root, displays: displays)
-        _ = model.add(width: 1920, height: 1080, hiDPI: true, flags: .standard)
+        _ = model.add(.hiDPI(width: 1920, height: 1080, flags: .standard))
         displays.set([second])
         model.reloadTargets()
         #expect(model.selection == OverrideKey(display: first))
@@ -127,12 +127,12 @@ struct GatedRunner: CommandRunning {
         defer { try? FileManager.default.removeItem(at: root) }
         let gate = Gate()
         let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: GatedRunner(gate: gate))
-        _ = model.add(width: 1920, height: 1080, hiDPI: true, flags: .standard)
+        _ = model.add(.hiDPI(width: 1920, height: 1080, flags: .standard))
         let written = try #require(model.draft?.working)
 
         let save = Task { await model.save() }
         while !model.isWorking { await Task.yield() }
-        #expect(model.add(width: 2560, height: 1440, hiDPI: true, flags: .standard) != nil)
+        #expect(model.add(.hiDPI(width: 2560, height: 1440, flags: .standard)) != nil)
         model.productName = "Renamed"
         model.revert()
         model.requestSelection(OverrideKey(display: second))
@@ -178,5 +178,29 @@ struct GatedRunner: CommandRunning {
     ])
     func rejectsWhatIsNotASize(width: String, height: String) {
         #expect(ResolutionInput.size(width: width, height: height) == nil)
+    }
+
+    /// The flags field is hidden for 1× entries, so whatever was left in it must not
+    /// stop one being added.
+    @Test func ignoresTheFlagsOfA1xEntry() throws {
+        let entry = try ResolutionInput.entry(width: "2560", height: "1440", hiDPI: false, flags: "left over")
+        #expect(entry == .standard(width: 2560, height: 1440))
+    }
+
+    @Test func readsTheFlagsOfAHiDPIEntry() throws {
+        let entry = try ResolutionInput.entry(width: "1920", height: "1080", hiDPI: true, flags: "0000000b 00a00000")
+        #expect(entry == .hiDPI(width: 1920, height: 1080, flags: HiDPIFlags(primary: 0xB, secondary: 0xA0_0000)))
+    }
+
+    @Test func rejectsBadFlagsForAHiDPIEntry() {
+        #expect(throws: ResoluteError.invalidFlags("left over")) {
+            try ResolutionInput.entry(width: "1920", height: "1080", hiDPI: true, flags: "left over")
+        }
+    }
+
+    @Test func rejectsAnEntryWithoutASize() {
+        #expect(throws: ResoluteError.self) {
+            try ResolutionInput.entry(width: "19x0", height: "1080", hiDPI: false, flags: "")
+        }
     }
 }
