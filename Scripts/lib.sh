@@ -12,6 +12,21 @@ app_is_running() {
   [[ "$(osascript -e "application id \"$BUNDLE_ID\" is running" 2>/dev/null)" == "true" ]]
 }
 
+# Turns off Launch at Login through the app at $1, if it is a build that knows how.
+# Builds before 0.2 start the whole menu-bar app for a flag they don't know, which would
+# leave the caller waiting on it, so they are not asked.
+unregister_login_item() {
+  local app="$1" version
+  version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist" 2>/dev/null || true)"
+  case "$version" in
+    "" | 0.0.* | 0.1.*)
+      echo "If you turned on Launch at Login, turn it off in System Settings > General > Login Items."
+      return 0
+      ;;
+  esac
+  "$app/Contents/MacOS/Resolute" --unregister-login-item >/dev/null 2>&1 || true
+}
+
 # Asks the app to quit and waits for it to exit, up to RESOLUTE_QUIT_TIMEOUT seconds.
 # Succeeds at once if the app was not running. Fails if it is still running at the
 # deadline (for example because it is asking about unsaved changes); the caller decides

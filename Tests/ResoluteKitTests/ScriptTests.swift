@@ -77,6 +77,42 @@ import Testing
         #expect(result.status == 0, "\(result.output)")
     }
 
+    // MARK: - unregister_login_item
+
+    /// A fake Resolute.app whose "binary" records the arguments it was run with.
+    private static func fakeApp(version: String?, in folder: URL) throws -> (app: URL, marker: URL) {
+        let app = folder.appending(path: "Resolute.app")
+        let executable = app.appending(path: "Contents/MacOS/Resolute")
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var info: [String: Any] = ["CFBundleIdentifier": "com.example.NotResolute"]
+        if let version { info["CFBundleShortVersionString"] = version }
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: app.appending(path: "Contents/Info.plist"))
+        let marker = folder.appending(path: "ran")
+        try Data("#!/bin/sh\necho \"$@\" > \(shellQuote(marker.path))\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        return (app, marker)
+    }
+
+    private static func unregister(_ app: URL) throws {
+        let script = "source \(shellQuote(libPath))\nunregister_login_item \(shellQuote(app.path))"
+        let result = try run("/bin/bash", ["-c", script])
+        #expect(result.status == 0, "\(result.output)")
+    }
+
+    /// 0.1 builds start the whole menu-bar app for a flag they don't know, which would
+    /// leave the uninstaller waiting on it for ever, so only 0.2 and later are asked.
+    @Test(arguments: [("0.1.0", false), (nil, false), ("0.2.0", true), ("1.4.2", true)])
+    func asksOnlyBuildsThatKnowTheFlag(version: String?, runs: Bool) throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (app, marker) = try Self.fakeApp(version: version, in: folder)
+        try Self.unregister(app)
+        let ran = try? String(contentsOf: marker, encoding: .utf8)
+        #expect((ran != nil) == runs)
+        if runs { #expect(ran == "--unregister-login-item\n") }
+    }
+
     // MARK: - quit_and_wait
 
     @Test func quitAndWaitSucceedsAtOnceWhenNothingIsRunning() throws {

@@ -10,10 +10,9 @@ BIN_DIR="${RESOLUTE_BIN_DIR:-/usr/local/bin}"
 BUNDLE_ID="com.omarhanafy.Resolute"
 APP_PATH="$APP_DIR/Resolute.app"
 
-# Turn off Launch at Login before the app binary is gone. Older builds without this
-# diagnostic flag are ignored, not treated as a failure.
+# Turn off Launch at Login while the app is still there to do it.
 if [[ -d "$APP_PATH" ]]; then
-  "$APP_PATH/Contents/MacOS/Resolute" --unregister-login-item >/dev/null 2>&1 || true
+  unregister_login_item "$APP_PATH"
 fi
 
 # The old process may still be exiting, or may be asking about unsaved custom
