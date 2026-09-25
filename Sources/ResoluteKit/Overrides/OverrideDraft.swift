@@ -13,12 +13,38 @@ public struct OverrideDraft: Equatable, Sendable {
     public var hasChanges: Bool { working != saved }
 
     /// Adds an entry after checking it is sensible and not already listed.
-    public mutating func add(_ entry: ScaleResolution) throws {
+    ///
+    /// A HiDPI entry is written together with a 1× entry at its pixel size, and a file read
+    /// back lists that pair as the HiDPI entry alone. So a 1× entry some HiDPI entry already
+    /// writes is refused, and a 1× entry the new HiDPI entry will write is folded into it:
+    /// the list then shows what reopening the saved file will show. Returns the folded entries.
+    @discardableResult
+    public mutating func add(_ entry: ScaleResolution) throws -> [ScaleResolution] {
         try Self.validate(entry)
         if working.resolutions.contains(where: { $0.sameMode(as: entry) }) {
             throw ResoluteError.invalidEntry("\(entry.sizeText) (\(entry.kindText)) is already in the list.")
         }
+        if let writer = hiDPIEntry(writing: entry) {
+            throw ResoluteError.invalidEntry(
+                "\(entry.sizeText) (1×) is already there: it is written with the HiDPI entry \(writer.sizeText)."
+            )
+        }
+        var folded: [ScaleResolution] = []
+        if case .hiDPI = entry, let pixels = entry.pixelSize {
+            folded = working.resolutions.filter { $0 == .standard(width: pixels.width, height: pixels.height) }
+            working.resolutions.removeAll { folded.contains($0) }
+        }
         working.resolutions.append(entry)
+        return folded
+    }
+
+    /// The HiDPI entry that writes the 1× `entry` as its backing, if there is one.
+    public func hiDPIEntry(writing entry: ScaleResolution) -> ScaleResolution? {
+        guard case .standard(let width, let height) = entry else { return nil }
+        return working.resolutions.first { candidate in
+            guard case .hiDPI = candidate, let pixels = candidate.pixelSize else { return false }
+            return pixels.width == width && pixels.height == height
+        }
     }
 
     public mutating func remove(atOffsets offsets: IndexSet) {

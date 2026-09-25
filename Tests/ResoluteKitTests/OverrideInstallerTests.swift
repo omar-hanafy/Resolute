@@ -220,6 +220,36 @@ import Testing
         }
     }
 
+    @Test func refusesA1xEntryThatAHiDPIEntryAlreadyWrites() {
+        var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [.hiDPI(width: 1280, height: 720, flags: .standard)]))
+        let expected = ResoluteError.invalidEntry(
+            "2560 × 1440 (1×) is already there: it is written with the HiDPI entry 1280 × 720."
+        )
+        #expect(throws: expected) {
+            try draft.add(.standard(width: 2560, height: 1440))
+        }
+    }
+
+    @Test func foldsA1xEntryIntoTheHiDPIEntryThatNowWritesIt() throws {
+        var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [
+            .standard(width: 2560, height: 1440), .standard(width: 1920, height: 1080),
+        ]))
+        let folded = try draft.add(.hiDPI(width: 1280, height: 720, flags: .standard))
+        #expect(folded == [.standard(width: 2560, height: 1440)])
+        #expect(draft.working.resolutions == [
+            .standard(width: 1920, height: 1080), .hiDPI(width: 1280, height: 720, flags: .standard),
+        ])
+    }
+
+    @Test func listsWhatAReloadWouldList() throws {
+        var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [.standard(width: 2560, height: 1440)]))
+        try draft.add(.hiDPI(width: 1280, height: 720, flags: .standard))
+        try draft.add(.standard(width: 1920, height: 1080))
+        #expect(throws: ResoluteError.self) { try draft.add(.standard(width: 2560, height: 1440)) }
+        let reloaded = try DisplayOverride(key: key, propertyList: draft.working.propertyListData())
+        #expect(Set(reloaded.resolutions) == Set(draft.working.resolutions))
+    }
+
     @Test func removesByOffsets() {
         var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [
             .standard(width: 1920, height: 1080), .standard(width: 2560, height: 1440), .standard(width: 3840, height: 2160),
