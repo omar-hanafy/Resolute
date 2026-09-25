@@ -801,6 +801,18 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         return data
     }
 
+    /// Removing the file also drops edits to it, so the question says so when there are any.
+    @Test func warnsThatRemovingTheOverrideDropsUnsavedChanges() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [.standard(width: 2560, height: 1440)]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first]))
+        let plain = "macOS goes back to the display's default resolutions after you reconnect it or restart. A backup is kept."
+        #expect(model.removalMessage == plain)
+        #expect(model.add(.standard(width: 1920, height: 1080)) == nil)
+        #expect(model.removalMessage == plain + " Your unsaved changes are discarded.")
+    }
+
     /// A backup of a file Resolute can't edit can still be put back, as it is.
     @Test func restoresABackupItCannotShow() async throws {
         let root = try temporaryRoot()

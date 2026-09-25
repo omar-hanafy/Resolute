@@ -278,6 +278,12 @@ final class CustomResolutionsModel {
         return !hasFolder(inPlaceOf: selection)
     }
 
+    /// What Remove Override… asks under its question. Removing the file drops edits to it.
+    var removalMessage: String {
+        "macOS goes back to the display's default resolutions after you reconnect it or restart. A backup is kept."
+            + (hasChanges ? " Your unsaved changes are discarded." : "")
+    }
+
     var restoreBackupHelp: String {
         hasChanges ? "Save or revert your changes before restoring a backup." : "Put back an earlier version of this override."
     }

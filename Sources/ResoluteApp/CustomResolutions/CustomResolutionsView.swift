@@ -142,7 +142,7 @@ private struct OverrideFileActions: View {
                 .confirmationDialog("Remove the custom override for this display?", isPresented: $isConfirmingRemoval) {
                     Button("Remove Override", role: .destructive) { Task { await model.removeOverride() } }
                 } message: {
-                    Text("macOS goes back to the display's default resolutions after you reconnect it or restart. A backup is kept.")
+                    Text(model.removalMessage)
                 }
         }
         if !model.backups.isEmpty {
@@ -185,20 +185,32 @@ struct ActionBarLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
-        let oneRow = rowWidth(sizes) <= bounds.width
+        for (subview, (size, origin)) in zip(subviews, zip(sizes, Self.origins(for: sizes, in: bounds, spacing: spacing))) {
+            subview.place(at: origin, anchor: .topLeading, proposal: ProposedViewSize(size))
+        }
+    }
+
+    /// Where each group of `sizes` goes in `bounds`.
+    static func origins(for sizes: [CGSize], in bounds: CGRect, spacing: CGFloat) -> [CGPoint] {
+        let oneRow = rowWidth(sizes, spacing: spacing) <= bounds.width
         var x = bounds.minX
         var y = bounds.minY
-        for (index, subview) in subviews.enumerated() {
-            let size = sizes[index]
-            let isLast = index == subviews.count - 1
-            let origin = CGPoint(x: isLast ? bounds.maxX - size.width : x, y: oneRow ? bounds.midY - size.height / 2 : y)
-            subview.place(at: origin, anchor: .topLeading, proposal: ProposedViewSize(size))
+        return sizes.enumerated().map { index, size in
+            let isLast = index == sizes.count - 1
+            // Wrapped, every row but the last starts at the leading edge.
+            let leading = oneRow ? x : bounds.minX
+            let origin = CGPoint(x: isLast ? bounds.maxX - size.width : leading, y: oneRow ? bounds.midY - size.height / 2 : y)
             x += size.width + spacing
             y += size.height + spacing
+            return origin
         }
     }
 
     private func rowWidth(_ sizes: [CGSize]) -> CGFloat {
+        Self.rowWidth(sizes, spacing: spacing)
+    }
+
+    private static func rowWidth(_ sizes: [CGSize], spacing: CGFloat) -> CGFloat {
         sizes.map(\.width).reduce(0, +) + spacing * CGFloat(max(sizes.count - 1, 0))
     }
 }

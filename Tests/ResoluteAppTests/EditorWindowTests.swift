@@ -119,6 +119,16 @@ import Testing
         #expect(bar(width: 357) == CGSize(width: 357, height: 50))
     }
 
+    /// Wrapped, each group starts its own row at the leading edge, the last at the trailing
+    /// edge; in one row they follow each other, the last trailing.
+    @Test func placesEachGroupOfTheButtonBar() {
+        let sizes = [CGSize(width: 100, height: 20), CGSize(width: 80, height: 20), CGSize(width: 60, height: 20)]
+        let wrapped = ActionBarLayout.origins(for: sizes, in: CGRect(x: 10, y: 0, width: 200, height: 76), spacing: 8)
+        #expect(wrapped == [CGPoint(x: 10, y: 0), CGPoint(x: 10, y: 28), CGPoint(x: 150, y: 56)])
+        let oneRow = ActionBarLayout.origins(for: sizes, in: CGRect(x: 10, y: 0, width: 400, height: 20), spacing: 8)
+        #expect(oneRow == [CGPoint(x: 10, y: 0), CGPoint(x: 118, y: 0), CGPoint(x: 350, y: 0)])
+    }
+
     /// The window becomes key when someone comes back to it, and after its sheets and
     /// alerts close: the override is read again then.
     @Test func readsTheOverrideAgainWhenTheWindowBecomesKey() throws {
