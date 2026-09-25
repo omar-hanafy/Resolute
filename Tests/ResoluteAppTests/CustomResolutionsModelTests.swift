@@ -164,3 +164,16 @@ struct GatedRunner: CommandRunning {
         #expect(shortcut("terminate:") == "q")
     }
 }
+
+@Suite struct ResolutionInputTests {
+    @Test func readsWhatWasTyped() throws {
+        let size = try #require(ResolutionInput.size(width: " 2560", height: "1440 "))
+        #expect(size.width == 2560)
+        #expect(size.height == 1440)
+    }
+
+    @Test(arguments: [("", "1080"), ("1920", ""), ("19x0", "1080"), ("-1920", "1080"), ("0", "1080")])
+    func rejectsWhatIsNotASize(width: String, height: String) {
+        #expect(ResolutionInput.size(width: width, height: height) == nil)
+    }
+}
