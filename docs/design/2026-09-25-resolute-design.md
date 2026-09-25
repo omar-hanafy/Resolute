@@ -181,7 +181,10 @@ Makefile                     build / test / app / install / uninstall / clean
   partner only when the same edit added it, because a file cannot say why a standard
   entry is there (see Revisions). New HiDPI entries use flags `0x00000009 / 0x00A00000`
   (Apple's most common HiDPI combination). Unknown top-level keys are preserved; empty product names are omitted
-  instead of written as `""`; `target-default-ppmm` defaults to 10.01 as RDM did.
+  instead of written as `""`; a new file gets `target-default-ppmm` 10.01 as RDM's did,
+  while an existing one (such as a copy of Apple's) keeps its own keys. Apple's 12-byte
+  entries (pixel width, pixel height, flags) are kept byte for byte but count as the
+  modes they name.
   Golden test: the owner's existing RDM-written file round-trips unchanged.
 - **`OverrideInstaller`**: runs one shell script that carries the plist base64-encoded,
   so root never reads a file another process could swap. Under `umask 022` it copies an
@@ -285,6 +288,9 @@ Commit messages describe the change only (no tool attribution).
   lists the native 3456 × 2234 at 1×, and adding 1728 × 1117 HiDPI and removing it again
   deleted that entry. The pairing now happens only when a HiDPI entry is added, as a
   visible row.
+- **Apple's own entries are respected.** Apple's file for the built-in panel writes its
+  HiDPI modes as 12-byte entries and has no `target-default-ppmm`; 0.1 duplicated those
+  modes and added the density to every copy it saved.
 - **Hidden-mode trials check that the display switched** before asking to keep the
   mode: `CGSConfigureDisplayMode` returns nothing, so a mode the display refused looked
   applied.

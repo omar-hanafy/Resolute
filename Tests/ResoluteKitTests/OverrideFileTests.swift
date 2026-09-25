@@ -139,7 +139,27 @@ import Testing
         #expect(written["IODisplayEDID"] as? Data == Data([0, 255, 255]))
         #expect(written["DisplayProductName"] as? String == "DELL U2720Q")
         #expect((written["scale-resolutions"] as? [Data])?.count == 2)
-        #expect(written["target-default-ppmm"] as? Double == 10.01)
+        // The file had no target density, and a copy must not gain one (see below).
+        #expect(written["target-default-ppmm"] == nil)
+    }
+
+    /// RDM gave the files it created a target density of 10.01. A file that exists keeps
+    /// its own keys: Apple's file for the built-in panel has none, and a density steers
+    /// which mode macOS makes the default.
+    @Test func addsTheTargetDensityOnlyToNewOverrides() throws {
+        func written(_ override: DisplayOverride) throws -> [String: Any] {
+            try #require(try PropertyListSerialization.propertyList(from: override.propertyListData(), format: nil) as? [String: Any])
+        }
+        var fresh = DisplayOverride(key: key)
+        fresh.resolutions = [.standard(width: 1920, height: 1080)]
+        #expect(try written(fresh)["target-default-ppmm"] as? Double == 10.01)
+
+        let apples = try PropertyListSerialization.data(fromPropertyList: [
+            "DisplayProductName": "Color LCD", "scale-resolutions": [hexData("00000d80 000008ba")],
+        ], format: .xml, options: 0)
+        var copy = try DisplayOverride(key: key, propertyList: apples)
+        copy.resolutions.append(.hiDPI(width: 1600, height: 900, flags: .standard))
+        #expect(try written(copy)["target-default-ppmm"] == nil)
     }
 
     @Test func writesNothingForAnEmptyOverride() throws {

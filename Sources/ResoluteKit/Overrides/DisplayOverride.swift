@@ -73,7 +73,7 @@ public struct DisplayOverride: Equatable, Sendable {
     public static let productNameKey = "DisplayProductName"
     public static let resolutionsKey = "scale-resolutions"
     public static let targetPPMMKey = "target-default-ppmm"
-    /// The value RDM wrote when a file had none.
+    /// The value RDM gave the files it created.
     public static let defaultTargetPPMM = 10.01
 
     public var key: OverrideKey
@@ -82,17 +82,23 @@ public struct DisplayOverride: Equatable, Sendable {
     public var resolutions: [ScaleResolution]
     /// Every other key in the file, written back unchanged.
     public var otherKeys: PropertyListDictionary
+    /// True until the override exists as a file. Like RDM, Resolute gives a new file the
+    /// target density `defaultTargetPPMM`; a file that exists, such as a copy of Apple's,
+    /// keeps its own keys, because the density steers which mode macOS makes the default.
+    public var isNew: Bool
 
     public init(
         key: OverrideKey,
         productName: String? = nil,
         resolutions: [ScaleResolution] = [],
-        otherKeys: PropertyListDictionary = .empty
+        otherKeys: PropertyListDictionary = .empty,
+        isNew: Bool = true
     ) {
         self.key = key
         self.productName = productName
         self.resolutions = resolutions
         self.otherKeys = otherKeys
+        self.isNew = isNew
     }
 
     /// Reads an override file's contents.
@@ -111,7 +117,10 @@ public struct DisplayOverride: Equatable, Sendable {
             resolutions = ScaleResolutionCodec.decode(elements)
             dictionary.removeValue(forKey: Self.resolutionsKey)
         }
-        self.init(key: key, productName: productName, resolutions: resolutions, otherKeys: PropertyListDictionary(dictionary))
+        self.init(
+            key: key, productName: productName, resolutions: resolutions, otherKeys: PropertyListDictionary(dictionary),
+            isNew: false
+        )
     }
 
     /// The file contents, as an XML property list.
@@ -123,7 +132,7 @@ public struct DisplayOverride: Equatable, Sendable {
         let encoded = ScaleResolutionCodec.encode(resolutions)
         if !encoded.isEmpty {
             dictionary[Self.resolutionsKey] = encoded
-            if dictionary[Self.targetPPMMKey] == nil {
+            if isNew, dictionary[Self.targetPPMMKey] == nil {
                 dictionary[Self.targetPPMMKey] = Self.defaultTargetPPMM
             }
         }
