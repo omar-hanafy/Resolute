@@ -109,6 +109,27 @@ import Testing
         #expect(try store.installedOverride(for: key)?.resolutions == override(2560).resolutions)
     }
 
+    /// A link to a file that is gone is no override, to macOS and to Resolute: an edit that
+    /// read it as absent replaces the link itself, and never creates the file it points to.
+    @Test func replacesALinkToAFileThatIsGone() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = installer(at: root)
+        let store = OverrideStore(locations: installer.locations)
+        let gone = root.appending(path: "gone.plist")
+        let url = installer.locations.userFile(for: key)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: url, withDestinationURL: gone)
+        let read = try store.installedState(for: key)
+        #expect(read == .absent)
+
+        try await installer.install(override(2560), expecting: read)
+        #expect(try store.installedOverride(for: key)?.resolutions == override(2560).resolutions)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: url.path(percentEncoded: false))) == nil)
+        #expect(!FileManager.default.fileExists(atPath: gone.path(percentEncoded: false)))
+        #expect(backupCount(installer) == 0)
+    }
+
     /// The app cannot hold the lock itself (the lock file lives where only root may create
     /// it), so its scripts take the same lock the command line holds.
     @Test func takesTheCommandLinesLockInsideTheScript() async throws {

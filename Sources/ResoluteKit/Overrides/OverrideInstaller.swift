@@ -171,7 +171,9 @@ public struct OverrideInstaller: Sendable {
         case nil:
             return nil
         case .absent?:
-            return "if [ -e \(file) ] || [ -L \(file) ]; then \(changed); fi"
+            // Through a link too: a link to a file that is gone is no override, to macOS and
+            // to the read, and `mv` replaces the link itself.
+            return "if [ -e \(file) ]; then \(changed); fi"
         case .contents(let data)?:
             // Through a link, as the file was read: an override may be linked into place.
             return "if [ ! -f \(file) ] || ! printf '%s' \(Shell.quote(data.base64EncodedString())) "

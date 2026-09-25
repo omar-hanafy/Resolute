@@ -341,6 +341,25 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         #expect(try installed(OverrideKey(display: first), under: root) == theirs.readBack())
     }
 
+    /// A link to a file that is gone is no override, so saving over it asks nothing: it
+    /// used to ask "changed" again after every Save Anyway, each time after the password.
+    @Test func savesOverALinkToAFileThatIsGone() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        let url = OverrideLocations.staged(at: root).userFile(for: key)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: url, withDestinationURL: root.appending(path: "gone.plist"))
+        let model = makeModel(root: root, displays: StubDisplays([first]))
+        #expect(model.source == .missing)
+        #expect(model.add(.standard(width: 1920, height: 1200)) == nil)
+
+        await model.save()
+        #expect(model.conflict == nil)
+        #expect(!model.hasChanges)
+        #expect(try installed(key, under: root)?.resolutions == [.standard(width: 1920, height: 1200)])
+    }
+
     @Test func saveAnywayReplacesTheNewVersionAndBacksItUp() async throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
