@@ -34,8 +34,16 @@ struct LocationOptions: ParsableArguments {
 
     /// Held while a command reads, changes and writes an override, so commands that
     /// overlap cannot lose each other's changes.
-    var lock: OverrideLock {
-        OverrideLock(file: locations.lockFile)
+    func withLock<T>(in context: CommandContext, _ body: () async throws -> T) async throws -> T {
+        try await OverrideLock(file: locations.lockFile).withLock(onWait: {
+            context.writeError("Waiting for another resolute command to finish editing overrides…")
+        }, body)
+    }
+
+    /// How to run a follow-up command against the same overrides.
+    func command(_ arguments: String, isRoot: Bool) -> String {
+        if let root { return "resolute \(arguments) --root \(Output.shellWord(root))" }
+        return (isRoot ? "sudo " : "") + "resolute \(arguments)"
     }
 }
 
@@ -105,19 +113,26 @@ struct EntryOptions: ParsableArguments {
     @Flag(help: "A 1× entry instead of a HiDPI one (same as @1x).")
     var standard = false
 
-    func entry(flags: HiDPIFlags? = nil) throws -> ScaleResolution {
-        try ScaleResolution(parsing: resolution, standard: standard, flags: flags)
+    /// The entry named, checked as `add` would check it. Problems are usage errors.
+    func entry(flags: String? = nil) throws -> ScaleResolution {
+        do {
+            let entry = try ScaleResolution(parsing: resolution, standard: standard, flags: try flags.map { try HiDPIFlags(parsing: $0) })
+            try OverrideDraft.validate(entry)
+            return entry
+        } catch let error as ResoluteError {
+            throw ResoluteError.usage(error.localizedDescription)
+        }
     }
 
-    /// Reports a malformed entry as a usage error. Only something shaped like a size is
-    /// checked: a bare word is more likely the value of a mistyped option, which
-    /// ArgumentParser reports after validation.
+    /// Reports a bad entry while parsing. Only something shaped like a size is checked:
+    /// a bare word is more likely the value of a mistyped option, which ArgumentParser
+    /// reports after validation; anything else is reported by `entry(flags:)` later.
     func validate(flags: String? = nil) throws {
         guard Output.looksLikeSize(resolution) else { return }
         do {
-            _ = try entry(flags: try flags.map { try HiDPIFlags(parsing: $0) })
-        } catch {
-            throw ValidationError(error.localizedDescription)
+            _ = try entry(flags: flags)
+        } catch ResoluteError.usage(let message) {
+            throw ValidationError(message)
         }
     }
 }
@@ -188,7 +203,7 @@ struct AddResolution: AsyncParsableCommand, ContextCommand {
 
     @OptionGroup var entry: EntryOptions
 
-    @Option(help: "HiDPI flags as two hex words (default 00000009 00a00000).")
+    @Option(help: "HiDPI flags as two hex words, for example 00000009,00a00000 (the default).")
     var flags: String?
 
     @OptionGroup var target: OverrideTargetOptions
@@ -203,10 +218,10 @@ struct AddResolution: AsyncParsableCommand, ContextCommand {
     }
 
     func run(in context: CommandContext) async throws {
-        let newEntry = try entry.entry(flags: try flags.map { try HiDPIFlags(parsing: $0) })
+        let newEntry = try entry.entry(flags: flags)
         let target = try target.target(in: context)
         let installer = try location.installer(in: context)
-        try await location.lock.withLock {
+        try await location.withLock(in: context) {
             var draft = OverrideDraft(try OverrideStore(locations: location.locations).editableOverride(for: target.key).override)
             let alsoAdded = try draft.add(newEntry)
             let url = try await installer.install(draft.working)
@@ -223,7 +238,13 @@ struct AddResolution: AsyncParsableCommand, ContextCommand {
 struct RemoveResolution: AsyncParsableCommand, ContextCommand {
     static let configuration = CommandConfiguration(
         commandName: "remove",
-        abstract: "Remove a custom resolution from a display's override."
+        abstract: "Remove a custom resolution from a display's override.",
+        discussion: """
+            Without an override of its own, the display's override starts as a copy of the one
+            macOS ships. Removing a HiDPI entry leaves the 1× entry at its pixel size, which the
+            override may need for other reasons; remove that separately if it was only there
+            for the HiDPI entry.
+            """
     )
 
     @OptionGroup var entry: EntryOptions
@@ -242,29 +263,48 @@ struct RemoveResolution: AsyncParsableCommand, ContextCommand {
         let unwanted = try entry.entry()
         let target = try target.target(in: context)
         let installer = try location.installer(in: context)
-        try await location.lock.withLock {
-            guard let installed = try OverrideStore(locations: location.locations).installedOverride(for: target.key) else {
-                throw ResoluteError.invalidEntry("There is no custom override for \(target).")
+        let store = OverrideStore(locations: location.locations)
+        try await location.withLock(in: context) {
+            let (override, source) = try store.editableOverride(for: target.key)
+            guard source != .missing else {
+                throw ResoluteError.invalidEntry("There is no override for \(target), so there is nothing to remove.")
             }
-            var draft = OverrideDraft(installed)
+            var draft = OverrideDraft(override)
             let matches = draft.working.resolutions.filter { $0.sameMode(as: unwanted) }
             guard !matches.isEmpty else {
-                throw ResoluteError.invalidEntry("\(unwanted.sizeText) \(unwanted.kindText) is not in the override for \(target).")
+                throw ResoluteError.invalidEntry(missingMessage(for: unwanted, in: draft.working, target: target))
             }
             draft.remove(matches)
             let url = try await installer.install(draft.working)
-            context.write("Removed \(unwanted.sizeText) \(unwanted.kindText) for \(target).")
-            // Entries read from a file are never removed implicitly; say what stays.
-            if case .hiDPI = unwanted, let pixels = unwanted.pixelSize,
-               draft.working.resolutions.contains(.standard(width: pixels.width, height: pixels.height)) {
-                context.write(
-                    "\(pixels.width) × \(pixels.height) 1× stays in the override. To remove it too: "
-                        + "resolute overrides remove \(pixels.width)x\(pixels.height)@1x\(self.target.arguments)"
-                )
+            let count = matches.count > 1 ? " (\(matches.count) entries)" : ""
+            context.write("Removed \(unwanted.sizeText) \(unwanted.kindText)\(count) for \(target).")
+            if case .hiDPI = unwanted, let pixels = unwanted.pixelSize {
+                let partner = ScaleResolution.standard(width: pixels.width, height: pixels.height)
+                if draft.working.resolutions.contains(where: { $0.sameMode(as: partner) }) {
+                    // Entries are never removed implicitly, and one macOS ships is never
+                    // suggested for removal: it may be the panel's native size.
+                    let shipped = (try? store.systemOverride(for: target.key))??.resolutions
+                        .contains { $0.sameMode(as: partner) } ?? false
+                    context.write(shipped
+                        ? "\(partner.summary) stays in the override: the file macOS ships lists it too."
+                        : "\(partner.summary) stays in the override. If it was there only for \(unwanted.sizeText) HiDPI, "
+                            + "remove it too: " + location.command(
+                                "overrides remove \(pixels.width)x\(pixels.height)@1x\(self.target.arguments)", isRoot: context.isRoot
+                            ))
+                }
             }
             context.write("Saved \(url.path(percentEncoded: false))")
             context.write(OverridesCommand.reconnectHint)
         }
+    }
+
+    /// Why `entry` could not be found, pointing at the entry of the other kind when that is there.
+    private func missingMessage(for entry: ScaleResolution, in override: DisplayOverride, target: OverrideTarget) -> String {
+        let missing = "\(entry.sizeText) \(entry.kindText) is not in the override for \(target)"
+        guard case .hiDPI(let width, let height, _) = entry,
+              override.resolutions.contains(where: { $0.sameMode(as: .standard(width: width, height: height)) })
+        else { return missing + "." }
+        return missing + ", but \(width) × \(height) 1× is: add @1x."
     }
 }
 
@@ -284,18 +324,34 @@ struct ResetOverride: AsyncParsableCommand, ContextCommand {
     func run(in context: CommandContext) async throws {
         let target = try target.target(in: context)
         let file = location.locations.userFile(for: target.key).path(percentEncoded: false)
+        // Nothing to remove needs no administrator rights, so check before asking for them.
         guard FileManager.default.fileExists(atPath: file) else {
-            context.write("There is no custom override for \(target), so there is nothing to remove.")
+            context.write(Self.nothingToRemove(for: target))
             return
         }
         let installer = try location.installer(in: context)
-        try await location.lock.withLock {
+        let removed = try await location.withLock(in: context) { () async throws -> Bool in
+            // Checked again under the lock: an overlapping reset may have removed it.
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: file, isDirectory: &isFolder) else { return false }
+            guard !isFolder.boolValue else {
+                throw ResoluteError.invalidEntry("\(file) is a folder, not an override file. Remove it in the Finder.")
+            }
             try await installer.remove(target.key)
+            return true
+        }
+        guard removed else {
+            context.write(Self.nothingToRemove(for: target))
+            return
         }
         context.write(
             "Removed the override for \(target). A backup is in \(installer.locations.backupRoot.path(percentEncoded: false))"
         )
         context.write(OverridesCommand.reconnectHint)
+    }
+
+    static func nothingToRemove(for target: OverrideTarget) -> String {
+        "There is no custom override for \(target), so there is nothing to remove."
     }
 }
 
@@ -400,7 +456,7 @@ struct OverrideSummary: Encodable {
         lines.append("  vendor \(vendorID), product \(productID), \(connectedDisplay.map { "connected: \($0)" } ?? "not connected"), \(origin)")
         if let productName { lines.append("  name: \(productName)") }
         if let problem { lines.append("  problem: \(problem)") }
-        if entries.isEmpty { lines.append("  no custom resolutions") }
+        if entries.isEmpty, problem == nil { lines.append("  no custom resolutions") }
         lines += entries.map { "  • \($0.summary)" }
         return lines.joined(separator: "\n")
     }

@@ -36,15 +36,19 @@ import Testing
 
     /// Numbers no display has would overflow later arithmetic (sizes are multiplied, rates
     /// and scales become integers), so the parser turns them away.
-    @Test(arguments: [
-        "9223372036854775807x2", "70000x1080", "1920x70000",
-        "1920x1080@1e300", "1920x1080@inf", "1920x1080@20000hz",
-        "1920x1080@1e308x", "1920x1080@infx", "1920x1080@16x",
-    ])
+    @Test(arguments: ["1920x1080@1e300", "1920x1080@inf", "1920x1080@20000hz", "1920x1080@1e308x", "1920x1080@infx", "1920x1080@16x"])
     func rejectsNumbersNoDisplayHas(text: String) {
         #expect(throws: ResoluteError.invalidResolution(text)) {
             try ModeQuery(resolution: text)
         }
+    }
+
+    @Test(arguments: ["9223372036854775807x2", "70000x1080", "1920x70000", "99999999999999999999999x2"])
+    func saysHowBigASizeMayBe(text: String) {
+        #expect(throws: ResoluteError.sizeTooLarge(text)) {
+            try ModeQuery(resolution: text)
+        }
+        #expect(ResoluteError.sizeTooLarge(text).errorDescription == "“\(text)” is larger than any display: sizes go up to 65535.")
     }
 
     @Test(arguments: ["1496x967@60@50", "1496x967@2x@1x", "1496x967@2x@60hz@2x", "1920x1080@0.5"])

@@ -15,30 +15,93 @@ struct ResoluteCommand: AsyncParsableCommand {
     )
 
     static let commands = ["displays", "modes", "set", "mirror", "overrides"]
+    static let overridesCommands = ["list", "show", "add", "remove", "reset"]
 
-    /// Catches a mistyped command first: `displays`, the default, would only report an
-    /// unexpected argument.
     static func main() async {
-        if let message = unknownCommandMessage(for: Array(CommandLine.arguments.dropFirst())) {
-            FileHandle.standardError.write(Data("Error: \(message)\n".utf8))
-            Foundation.exit(ExitCode.validationFailure.rawValue)
+        let result = await execute(Array(CommandLine.arguments.dropFirst()), in: .live)
+        if let message = result.message, !message.isEmpty {
+            if result.code == 0 {
+                print(message)
+            } else {
+                FileHandle.standardError.write(Data((message + "\n").utf8))
+            }
         }
-        await main(nil)
+        Foundation.exit(result.code)
+    }
+
+    /// Parses and runs `arguments` against `context`; returns what to print besides the
+    /// command's own output, and the exit code. `main` and the tests both use it.
+    static func execute(_ arguments: [String], in context: CommandContext) async -> (message: String?, code: Int32) {
+        // A mistyped command is caught first: `displays`, the default, would only report
+        // an unexpected argument.
+        if let problem = unknownCommandMessage(for: arguments) {
+            return ("Error: \(problem)", ExitCode.validationFailure.rawValue)
+        }
+        let command: ParsableCommand
+        do {
+            command = try parseAsRoot(arguments)
+        } catch {
+            return (fullMessage(for: error), exitCode(for: error).rawValue)
+        }
+        do {
+            if let runnable = command as? any ContextCommand {
+                try await runnable.run(in: context)
+            } else {
+                var command = command
+                try command.run()
+            }
+            return (nil, 0)
+        } catch ResoluteError.usage(let message) {
+            return (usageMessage(message, for: type(of: command)), ExitCode.validationFailure.rawValue)
+        } catch {
+            return (fullMessage(for: error), exitCode(for: error).rawValue)
+        }
+    }
+
+    /// A mistake found while running, shown like ArgumentParser shows one found while
+    /// parsing: with the command's usage. (A `ValidationError` thrown from `run` would show
+    /// the usage of `resolute` itself.)
+    static func usageMessage(_ message: String, for command: ParsableCommand.Type) -> String {
+        let usage = usageString(for: command)
+        let path = usage.split(separator: " ").dropFirst().prefix { $0.first?.isLetter == true }.joined(separator: " ")
+        return "Error: \(message)\nUsage: \(usage)\n  See 'resolute \(path) --help' for more information."
     }
 
     static func unknownCommandMessage(for arguments: [String]) -> String? {
-        guard let word = arguments.first, !word.hasPrefix("-"), word != "help", !commands.contains(word) else {
-            return nil
+        guard let first = arguments.first, !first.hasPrefix("-") else { return nil }
+        if first == "help" {
+            // "resolute help mode" would print the root help and succeed.
+            guard arguments.count > 1, !arguments[1].hasPrefix("-"), !commands.contains(arguments[1]) else { return nil }
+            let word = arguments[1]
+            let suggestion = commands.first { isTypo(word.lowercased(), of: $0) }
+            return "“\(word)” is not a resolute command." + (suggestion.map { " Did you mean “resolute help \($0)”?" } ?? "")
         }
-        let problem = "“\(word)” is not a resolute command."
-        if word.lowercased() == "version" {
+        if first == "overrides" {
+            // "resolute overrides ad …" would reach `list`, the default, as extra arguments.
+            guard arguments.count > 1, !arguments[1].hasPrefix("-"), !overridesCommands.contains(arguments[1]) else {
+                return nil
+            }
+            let word = arguments[1]
+            let problem = "“\(word)” is not an overrides command."
+            if let command = overridesCommands.first(where: { isTypo(word.lowercased(), of: $0) }) {
+                return problem + " Did you mean “resolute overrides \(command)”?"
+            }
+            return problem + " The overrides commands are list, show, add, remove and reset."
+        }
+        guard !commands.contains(first) else { return nil }
+        let problem = "“\(first)” is not a resolute command."
+        if first.lowercased() == "version" {
             return problem + " Did you mean “resolute --version”?"
         }
-        if let command = commands.first(where: { isTypo(word.lowercased(), of: $0) }) {
+        // Checked before typos: "reset" is one letter from "set", which changes the screen.
+        if overridesCommands.contains(first.lowercased()) {
+            return problem + " Did you mean “resolute overrides \(first.lowercased())”?"
+        }
+        if let command = commands.first(where: { isTypo(first.lowercased(), of: $0) }) {
             return problem + " Did you mean “resolute \(command)”?"
         }
-        if Output.looksLikeSize(word), (try? ModeQuery(resolution: word)) != nil {
-            return problem + " To switch to that resolution, run “resolute set \(word)”."
+        if Output.looksLikeSize(first), (try? ModeQuery(resolution: first)) != nil {
+            return problem + " To switch to that resolution, run “resolute set \(first)”."
         }
         return problem + " The commands are displays, modes, set, mirror and overrides."
     }

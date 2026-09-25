@@ -341,12 +341,14 @@ import Testing
         #expect(throws: ResoluteError.invalidEntry("Flags apply only to HiDPI entries.")) {
             try ScaleResolution(parsing: "1680x1050@1x", flags: .standard)
         }
-        #expect(throws: ResoluteError.invalidResolution("big")) {
+        #expect(throws: ResoluteError.invalidEntry("“big” is not a resolution. Use WIDTHxHEIGHT, optionally followed by @2x or @1x, for example 2560x1080.")) {
             try ScaleResolution(parsing: "big")
         }
-        #expect(throws: ResoluteError.invalidResolution("4611686018427387904x1080")) {
+        #expect(throws: ResoluteError.sizeTooLarge("4611686018427387904x1080")) {
             try ScaleResolution(parsing: "4611686018427387904x1080")
         }
+        #expect(ResoluteError.invalidFlags("junk").errorDescription
+            == "“junk” is not a flags value. Use two 32-bit hex words, for example 00000009,00a00000.")
     }
 }
 

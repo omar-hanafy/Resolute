@@ -51,7 +51,15 @@ public enum ScaleResolution: Hashable, Sendable {
     /// Reads a command-line entry: "1680x1050" (HiDPI unless `standard`), "1680x1050@2x"
     /// or "1680x1050@1x". Refresh rates and other scales are rejected.
     public init(parsing text: String, standard: Bool = false, flags: HiDPIFlags? = nil) throws {
-        let query = try ModeQuery(resolution: text)
+        let query: ModeQuery
+        do {
+            query = try ModeQuery(resolution: text)
+        } catch ResoluteError.invalidResolution {
+            // ModeQuery's example has a refresh rate, which an entry cannot hold.
+            throw ResoluteError.invalidEntry(
+                "“\(text)” is not a resolution. Use WIDTHxHEIGHT, optionally followed by @2x or @1x, for example 2560x1080."
+            )
+        }
         guard let width = query.width, let height = query.height else {
             throw ResoluteError.invalidResolution(text)
         }

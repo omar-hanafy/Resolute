@@ -49,9 +49,13 @@ enum Output {
         String(value, radix: 16)
     }
 
-    /// True for text shaped like WIDTHxHEIGHT, as opposed to a stray word or number.
+    /// True for text that starts like WIDTHxHEIGHT: a number, then an x. A stray word, even
+    /// one with an x in it such as "Pro Display XDR", is not.
     static func looksLikeSize(_ text: String) -> Bool {
-        text.lowercased().contains { $0 == "x" || $0 == "×" }
+        let compact = text.lowercased().replacingOccurrences(of: "×", with: "x").replacingOccurrences(of: " ", with: "")
+        guard let separator = compact.firstIndex(of: "x") else { return false }
+        let width = compact[..<separator]
+        return !width.isEmpty && width.allSatisfy { $0.isASCII && $0.isNumber }
     }
 
     /// `text`, quoted for a shell when it needs to be.

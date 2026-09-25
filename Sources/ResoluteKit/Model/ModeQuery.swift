@@ -53,10 +53,15 @@ public struct ModeQuery: Hashable, Sendable {
         var parts = normalized.split(separator: "@", omittingEmptySubsequences: false).map(String.init)
         let size = parts.removeFirst()
         let dimensions = size.split(separator: "x", omittingEmptySubsequences: false)
-        guard dimensions.count == 2,
-              let width = Int(dimensions[0]), let height = Int(dimensions[1]),
-              (1...Self.maximumDimension).contains(width), (1...Self.maximumDimension).contains(height)
-        else { throw ResoluteError.invalidResolution(text) }
+        guard dimensions.count == 2 else { throw ResoluteError.invalidResolution(text) }
+        let width = Int(dimensions[0]), height = Int(dimensions[1])
+        // Plain numbers beyond any display (Int overflow included) are too large, not malformed.
+        let isNumber = { (part: Substring) in !part.isEmpty && part.allSatisfy { $0.isASCII && $0.isNumber } }
+        if isNumber(dimensions[0]), isNumber(dimensions[1]),
+           (width ?? .max) > Self.maximumDimension || (height ?? .max) > Self.maximumDimension {
+            throw ResoluteError.sizeTooLarge(text)
+        }
+        guard let width, let height, width > 0, height > 0 else { throw ResoluteError.invalidResolution(text) }
         self.width = width
         self.height = height
         for part in parts {

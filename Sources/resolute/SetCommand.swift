@@ -84,15 +84,20 @@ struct SetCommand: ParsableCommand, ContextCommand {
         // Checked here rather than in validate(): ArgumentParser validates before it
         // reports unknown options, so this message would hide a mistyped one.
         guard resolution != nil || scale != nil || refresh != nil || modeID != nil || useDefault else {
-            throw ResoluteError.usage("Give a resolution, --refresh, --scale, --mode-id or --default. See 'resolute help set'.")
+            throw ResoluteError.usage("Give a resolution, --refresh, --scale, --mode-id or --default.")
         }
         let service = context.service
         let display = try target.resolve(in: service.displays())
         var query: ModeQuery
         do {
             query = try resolution.map { try ModeQuery(resolution: $0) } ?? ModeQuery()
-        } catch ResoluteError.invalidResolution(let text) where Double(text) != nil {
-            throw ResoluteError.usage("“\(text)” is not a resolution. To change only the refresh rate, use --refresh \(text).")
+        } catch ResoluteError.invalidResolution(let text) {
+            if refresh == nil, let rate = Double(text), ModeQuery.isPlausible(refreshRate: rate), rate <= 1_000 {
+                throw ResoluteError.usage("“\(text)” is not a resolution. To change only the refresh rate, use --refresh \(text).")
+            }
+            throw ResoluteError.usage(ResoluteError.invalidResolution(text).localizedDescription)
+        } catch let error as ResoluteError {
+            throw ResoluteError.usage(error.localizedDescription)
         }
         if let scale { query.scale = scale }
         if let refresh { query.refreshRate = refresh }

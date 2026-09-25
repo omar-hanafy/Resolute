@@ -133,14 +133,12 @@ func resolute(
     return transcript
 }
 
-/// The message and exit code the command line would show for `arguments`.
+/// The message and exit code the command line would show for `arguments`, or nil when
+/// the command succeeds. It goes through the same `execute` as `main`.
 func failure(_ arguments: [String], service: any DisplayControlling = FakeDisplays([Sample.builtIn])) async -> (message: String, code: Int32)? {
-    do {
-        try await resolute(arguments, service: service)
-        return nil
-    } catch {
-        return (ResoluteCommand.fullMessage(for: error), ResoluteCommand.exitCode(for: error).rawValue)
-    }
+    let transcript = Transcript()
+    let result = await ResoluteCommand.execute(arguments, in: transcript.context(service: service, isRoot: false, decision: .revert))
+    return result.code == 0 ? nil : (result.message ?? "", result.code)
 }
 
 enum CLITestError: Error {

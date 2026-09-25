@@ -112,10 +112,36 @@ import Testing
     }
 
     @Test func pointsABareRateAtRefresh() async {
-        #expect(await failure(["set", "60"])?.message
-            == "Error: “60” is not a resolution. To change only the refresh rate, use --refresh 60.")
-        #expect(await failure(["set"])?.message
-            == "Error: Give a resolution, --refresh, --scale, --mode-id or --default. See 'resolute help set'.")
+        let result = await failure(["set", "60"])
+        #expect(result?.message.hasPrefix("Error: “60” is not a resolution. To change only the refresh rate, use --refresh 60.\nUsage: resolute set ") == true)
+        #expect(result?.code == 64)
+        // Numbers that cannot be a rate, or a rate that is already given, get no such hint.
+        for arguments in [["set", "1496"], ["set", "0"], ["set", "60", "--refresh", "60"]] {
+            #expect(await failure(arguments)?.message.contains("--refresh \(arguments[1])") == false)
+        }
+    }
+
+    @Test func reportsMistakesFoundWhileRunningAsUsageErrors() async {
+        for arguments in [["set"], ["set", "abc"], ["set", "x1080"]] {
+            let result = await failure(arguments)
+            #expect(result?.code == 64, "\(arguments)")
+            #expect(result?.message.contains("Usage: resolute set") == true, "\(arguments)")
+        }
+        #expect(await failure(["set"])?.message.hasPrefix(
+            "Error: Give a resolution, --refresh, --scale, --mode-id or --default.\nUsage: resolute set "
+        ) == true)
+    }
+
+    /// A value containing an x is not a size unless it starts with a number.
+    @Test func namesAMistypedOptionWhoseValueHasAnX() async {
+        let result = await failure(["set", "--dry-run", "--dsplay", "Pro Display XDR", "1496x967"])
+        #expect(result?.message.hasPrefix("Error: Unknown option '--dsplay'") == true)
+    }
+
+    @Test func saysHowBigASizeMayBe() async {
+        #expect(await failure(["set", "70000x1080"])?.message.hasPrefix(
+            "Error: “70000x1080” is larger than any display: sizes go up to 65535."
+        ) == true)
     }
 
     @Test func explainsAMissingRateWithTheRatesOnOffer() async {
@@ -197,7 +223,10 @@ import Testing
         #expect(added.contains("Also added 2560 × 1440 1×, the 1× entry HiDPI entries are paired with."))
         let removed = try await resolute(["overrides", "remove", "1280x720"] + staged).output
         #expect(removed.hasPrefix("Removed 1280 × 720 HiDPI for Built-in Retina Display (vendor 610, product a050)."))
-        #expect(removed.contains("2560 × 1440 1× stays in the override. To remove it too: resolute overrides remove 2560x1440@1x"))
+        #expect(removed.contains(
+            "2560 × 1440 1× stays in the override. If it was there only for 1280 × 720 HiDPI, remove it too: "
+                + "resolute overrides remove 2560x1440@1x --root "
+        ))
         #expect(removed.hasSuffix("The change applies after you reconnect the display or restart the Mac."))
     }
 
@@ -271,6 +300,66 @@ import Testing
         #expect(apples["flags"] == nil)
     }
 
+    @Test(arguments: [["overrides", "add", "100x100"], ["overrides", "add", "1600x1000", "--flags", "8,a00000"], ["overrides", "add", "abc"], ["overrides", "remove", "abc"]])
+    func reportsBadEntriesAsUsageErrors(arguments: [String]) async throws {
+        let root = try stagedRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let result = await failure(arguments + ["--root", root.path(percentEncoded: false)])
+        #expect(result?.code == 64)
+        #expect(result?.message.contains("Usage: resolute overrides \(arguments[1])") == true)
+    }
+
+    @Test func givesExamplesThatWorkWhenCopied() async throws {
+        let entry = await failure(["overrides", "add", "abc", "--root", "/tmp/unused"])
+        #expect(entry?.message.hasPrefix("Error: “abc” is not a resolution. Use WIDTHxHEIGHT, optionally followed by @2x or @1x, for example 2560x1080.") == true)
+        let flags = await failure(["overrides", "add", "1600x1000", "--flags", "junk", "--root", "/tmp/unused"])
+        #expect(flags?.message.hasPrefix("Error: “junk” is not a flags value. Use two 32-bit hex words, for example 00000009,00a00000.") == true)
+        let root = try stagedRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await resolute(["overrides", "add", "1600x1000", "--flags", "00000009,00a00000", "--root", root.path(percentEncoded: false)])
+    }
+
+    /// The hint after removing a HiDPI entry must never talk someone into deleting the
+    /// panel's native entry from Apple's file.
+    @Test func removesFromApplesFileWithoutSuggestingToDeleteItsEntries() async throws {
+        let root = try stagedRootWithApplesFile()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let staged = ["--root", root.path(percentEncoded: false)]
+        try await resolute(["overrides", "add", "1728x1117"] + staged)
+        let removed = try await resolute(["overrides", "remove", "1728x1117"] + staged).output
+        #expect(removed.contains("3456 × 2234 1× stays in the override: the file macOS ships lists it too."))
+        #expect(!removed.contains("resolute overrides remove 3456x2234"))
+        // An entry that only Apple's file lists can be removed from a copy of it.
+        try await resolute(["overrides", "reset"] + staged)
+        let apples = try await resolute(["overrides", "remove", "1280x800"] + staged).output
+        #expect(apples.hasPrefix("Removed 1280 × 800 HiDPI for Built-in Retina Display (vendor 610, product a050)."))
+        let installed = try #require(try OverrideStore(locations: .staged(at: root)).installedOverride(for: OverrideKey(vendorID: 0x610, productID: 0xA050)))
+        #expect(installed.resolutions.count == 6)
+        #expect(installed.productName == "Color LCD")
+    }
+
+    @Test func pointsAtTheOneTimesEntryWhenTheHiDPIOneIsMissing() async throws {
+        let root = try stagedRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let staged = ["--root", root.path(percentEncoded: false)]
+        try await resolute(["overrides", "add", "3200x2000@1x"] + staged)
+        #expect(await failure(["overrides", "remove", "3200x2000"] + staged)?.message
+            == "Error: 3200 × 2000 HiDPI is not in the override for Built-in Retina Display (vendor 610, product a050), but 3200 × 2000 1× is: add @1x.")
+    }
+
+    @Test func tellsOnlyOneOfSeveralOverlappingResetsThatItRemovedTheOverride() async throws {
+        let root = try stagedRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let staged = ["--root", root.path(percentEncoded: false)]
+        try await resolute(["overrides", "add", "2560x1440@1x"] + staged)
+        let outputs = try await withThrowingTaskGroup(of: String.self) { group in
+            for _ in 0..<5 { group.addTask { try await resolute(["overrides", "reset"] + staged).output } }
+            return try await group.reduce(into: [String]()) { $0.append($1) }
+        }
+        #expect(outputs.filter { $0.hasPrefix("Removed the override") }.count == 1)
+        #expect(outputs.filter { $0.hasPrefix("There is no custom override") }.count == 4)
+    }
+
     @Test func needsRootForTheRealFolder() async {
         let result = await failure(["overrides", "add", "2560x1440"])
         #expect(result?.message == "Error: " + (ResoluteError.needsRoot.errorDescription ?? ""))
@@ -288,9 +377,25 @@ import Testing
             == "“frobnicate” is not a resolute command. The commands are displays, modes, set, mirror and overrides.")
     }
 
+    @Test func pointsOverridesCommandsAtOverrides() {
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["reset"])
+            == "“reset” is not a resolute command. Did you mean “resolute overrides reset”?")
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["list"])
+            == "“list” is not a resolute command. Did you mean “resolute overrides list”?")
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["overrides", "ad", "1600x1000"])
+            == "“ad” is not an overrides command. Did you mean “resolute overrides add”?")
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["overrides", "frobnicate"])
+            == "“frobnicate” is not an overrides command. The overrides commands are list, show, add, remove and reset.")
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["help", "mode"])
+            == "“mode” is not a resolute command. Did you mean “resolute help modes”?")
+    }
+
     @Test func leavesRealCommandsAndOptionsAlone() {
-        for arguments in [[], ["modes", "-d", "x"], ["--json"], ["help"], ["--version"], ["overrides"]] {
-            #expect(ResoluteCommand.unknownCommandMessage(for: arguments) == nil)
+        for arguments in [
+            [], ["modes", "-d", "x"], ["--json"], ["help"], ["--version"], ["overrides"], ["overrides", "--json"],
+            ["overrides", "list"], ["help", "set"], ["help", "overrides", "add"],
+        ] {
+            #expect(ResoluteCommand.unknownCommandMessage(for: arguments) == nil, "\(arguments)")
         }
     }
 }

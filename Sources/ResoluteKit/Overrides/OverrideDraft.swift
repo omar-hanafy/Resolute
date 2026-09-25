@@ -62,7 +62,9 @@ public struct OverrideDraft: Equatable, Sendable {
     /// The largest pixel size Resolute writes to an override.
     static let maximumPixels = 16_384
 
-    static func validate(_ entry: ScaleResolution) throws {
+    /// Throws when `entry` cannot be added: outside the sizes Resolute writes, HiDPI flags
+    /// without the HiDPI bit, or an entry Resolute keeps without interpreting.
+    public static func validate(_ entry: ScaleResolution) throws {
         switch entry {
         case .hiDPI(let width, let height, let flags):
             // Compared by halving the limit: doubling a huge size would overflow.

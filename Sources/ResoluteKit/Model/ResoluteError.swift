@@ -14,6 +14,7 @@ public enum ResoluteError: Error, Equatable, Sendable {
     case coreGraphics(code: Int32, operation: String)
     case mirroringNeedsTwoDisplays
     case invalidResolution(String)
+    case sizeTooLarge(String)
     case invalidFlags(String)
     case invalidEntry(String)
     case overrideUnreadable(path: String, reason: String)
@@ -55,8 +56,10 @@ extension ResoluteError: LocalizedError {
             "Mirroring needs at least two displays."
         case .invalidResolution(let text):
             "“\(text)” is not a resolution. Use WIDTHxHEIGHT, optionally followed by one @2x or @1x and one refresh rate, for example 1920x1080@2x@60."
+        case .sizeTooLarge(let text):
+            "“\(text)” is larger than any display: sizes go up to \(ModeQuery.maximumDimension)."
         case .invalidFlags(let text):
-            "“\(text)” is not a flags value. Use two 32-bit hex words, for example 00000009 00a00000."
+            "“\(text)” is not a flags value. Use two 32-bit hex words, for example 00000009,00a00000."
         case .invalidEntry(let message):
             message
         case .overrideUnreadable(let path, let reason):
