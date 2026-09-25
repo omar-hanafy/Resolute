@@ -62,6 +62,9 @@ public struct ModeSwitcher: Sendable {
     /// live tests set it, to run the hidden-mode path on a Mac without hidden modes;
     /// CoreGraphics reports its own failures for listed modes.
     var verifiesListedModes = false
+    /// How long a trial and the way back from it last. Only the live tests change it, to
+    /// `.app`, so CoreGraphics undoes their trial when the test process ends.
+    var trialScope = ConfigurationScope.session
 
     public init(service: any DisplayControlling) {
         self.service = service
@@ -82,7 +85,7 @@ public struct ModeSwitcher: Sendable {
         let previous = before?.currentModeID ?? service.currentModeID(of: displayID)
         guard previous != modeID else { return .alreadyCurrent }
         let name = before?.name ?? "Display \(displayID)"
-        let scope: ConfigurationScope = trial ? .session : .permanent
+        let scope = trial ? trialScope : .permanent
         let from = previous.map { "mode \($0)" } ?? "an unknown mode"
         Self.log.notice("""
             Switching \(name, privacy: .public) (display \(displayID)) from \(from, privacy: .public) \
@@ -181,7 +184,7 @@ public struct ModeSwitcher: Sendable {
         guard isOnline(restore.displayID) else { return nil }
         for candidate in [restore.modeID, restore.fallbackModeID].compactMap({ $0 }) {
             do {
-                try service.apply(modeID: candidate, to: restore.displayID, scope: .session)
+                try service.apply(modeID: candidate, to: restore.displayID, scope: trialScope)
                 return candidate
             } catch {
                 Self.log.error("""

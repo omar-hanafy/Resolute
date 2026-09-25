@@ -95,6 +95,16 @@ import Testing
         #expect(service.calls == [Call(modeID: 2, scope: .session), Call(modeID: 1, scope: .session)])
     }
 
+    /// The live tests try modes for the app only, so CoreGraphics undoes a trial when the
+    /// test process ends, even if it crashes.
+    @Test func triesAndPutsBackForTheScopeAskedFor() throws {
+        let service = FakeDisplayService(display: TestData.fullHD())
+        var switcher = ModeSwitcher(service: service)
+        switcher.trialScope = .app
+        #expect(try switcher.apply(modeID: 90, to: 2, trial: true) { .revert } == .reverted(to: 1))
+        #expect(service.calls == [Call(modeID: 90, scope: .app), Call(modeID: 1, scope: .app)])
+    }
+
     @Test func fallsBackToTheDefaultModeWhenANeverAppliedModeCannotBeUndone() {
         let service = FakeDisplayService(display: TestData.fullHD(currentModeID: 2), refusing: [2], ignoring: [90])
         #expect(throws: ResoluteError.modeNotApplied(display: "Full HD Monitor")) {
