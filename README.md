@@ -16,7 +16,7 @@ Resolute is a ground-up successor to [RDM](https://github.com/avibrazil/RDM). On
 
 ## Requirements
 
-- macOS 14 Sonoma or later. Developed and tested on macOS 27 on Apple silicon; the Intel build is checked under Rosetta.
+- macOS 14 Sonoma or later. Developed and tested on macOS 27 on Apple silicon. The app is also built for Intel Macs, which stop at macOS 26; that build only gets a quick check under Rosetta.
 - To build: Xcode 16 or later (the package needs Swift 6.0). Only Xcode 27 (Swift 6.4) has been tested so far.
 
 ## Install
