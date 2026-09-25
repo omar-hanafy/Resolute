@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import Observation
 import Testing
 @testable import ResoluteApp
 @testable import ResoluteKit
@@ -50,6 +51,43 @@ struct GatedRunner: CommandRunning {
     }
 }
 
+/// Set by an observation's change handler, which may run on any thread.
+final class ChangeFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool { lock.withLock { value } }
+
+    func set() {
+        lock.withLock { value = true }
+    }
+}
+
+/// Runs scripts with /bin/sh and counts them, so a test can tell that no password would
+/// have been asked for. `beforeFirstRun` stands for another tool's edit that lands after
+/// the model's check but before its script.
+final class CountingRunner: CommandRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var beforeFirstRun: (@Sendable () throws -> Void)?
+
+    init(beforeFirstRun: (@Sendable () throws -> Void)? = nil) {
+        self.beforeFirstRun = beforeFirstRun
+    }
+
+    var runs: Int { lock.withLock { count } }
+
+    func run(_ script: String) async throws {
+        let interference = lock.withLock {
+            count += 1
+            defer { beforeFirstRun = nil }
+            return beforeFirstRun
+        }
+        try interference?()
+        try await ShellCommandRunner().run(script)
+    }
+}
+
 @MainActor
 @Suite struct CustomResolutionsModelTests {
     let first = Display(id: 5, name: "First", vendorID: 0x10AC, productID: 0x1111, currentModeID: nil, modes: [])
@@ -82,6 +120,18 @@ struct GatedRunner: CommandRunning {
 
     let hd = ScaleResolution.hiDPI(width: 1920, height: 1080, flags: .standard)
     let qhd = ScaleResolution.hiDPI(width: 2560, height: 1440, flags: .standard)
+
+    /// The app runs as the user and cannot create the command line's lock file, so its
+    /// privileged scripts take that lock themselves, or a save could interleave with
+    /// `sudo resolute overrides add`. Nothing here runs a script.
+    @Test func privilegedScriptsTakeTheCommandLinesLock() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = CustomResolutionsModel(service: StubDisplays([first]), store: OverrideStore(locations: .staged(at: root)))
+        #expect(model.installer.runner is AdminCommandRunner)
+        #expect(model.installer.locations == .standard)
+        #expect(model.installer.scriptLock == OverrideLocations.standard.lockFile)
+    }
 
     @Test func switchesFreelyWithoutChanges() throws {
         let root = try temporaryRoot()
@@ -250,6 +300,676 @@ struct GatedRunner: CommandRunning {
         #expect(model.selectedEntries.isEmpty)
     }
 
+    // MARK: - Changed on disk
+
+    func installed(_ key: OverrideKey, under root: URL) throws -> DisplayOverride? {
+        try OverrideStore(locations: .staged(at: root)).installedOverride(for: key)
+    }
+
+    /// What another app, or `resolute`, writes while the editor has the file open.
+    var theirs: DisplayOverride {
+        DisplayOverride(key: OverrideKey(display: first), resolutions: [.standard(width: 1280, height: 800)])
+    }
+
+    /// Opens `first`'s override (`hd` alone), adds `qhd`, then lets another tool replace the file.
+    func editWhileAnotherToolWrites(root: URL, runner: CountingRunner) throws -> CustomResolutionsModel {
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        #expect(model.add(qhd) == nil)
+        try install(theirs, under: root)
+        return model
+    }
+
+    /// No password is asked for a save based on an old file, and the edits stay.
+    @Test func asksBeforeSavingOverAFileThatChanged() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = try editWhileAnotherToolWrites(root: root, runner: runner)
+
+        await model.save()
+        #expect(runner.runs == 0)
+        let conflict = try #require(model.conflict)
+        #expect(conflict.change == .save)
+        #expect(conflict.title == "The override for First changed after it was opened")
+        #expect(conflict.message.contains("another app or the resolute command"))
+        #expect(conflict.message.contains("Your changes are still here"))
+        #expect(conflict.proceedTitle == "Save Anyway")
+        #expect(conflict.discardTitle == "Discard My Changes")
+        #expect(model.hasChanges)
+        #expect(model.notice == nil)
+        #expect(try installed(OverrideKey(display: first), under: root) == theirs.readBack())
+    }
+
+    @Test func saveAnywayReplacesTheNewVersionAndBacksItUp() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = try editWhileAnotherToolWrites(root: root, runner: runner)
+        let ours = try #require(model.draft?.working)
+        await model.save()
+
+        await model.proceed(with: try #require(model.conflict))
+        #expect(runner.runs == 1)
+        #expect(model.conflict == nil)
+        #expect(!model.hasChanges)
+        #expect(model.notice?.title == "Custom resolutions saved")
+        let key = OverrideKey(display: first)
+        #expect(try installed(key, under: root)?.resolutions == ours.resolutions)
+        let store = OverrideStore(locations: .staged(at: root))
+        let backup = try #require(store.backups(for: key).first)
+        #expect(try store.contents(of: backup).override == theirs.readBack())
+    }
+
+    @Test func discardingMyChangesOpensTheNewVersion() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = try editWhileAnotherToolWrites(root: root, runner: runner)
+        await model.save()
+
+        model.reloadFromDisk()
+        #expect(model.conflict == nil)
+        #expect(!model.hasChanges)
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+        #expect(runner.runs == 0)
+        // What was read is now the file on disk, so a save goes ahead.
+        _ = model.add(hd)
+        await model.save()
+        #expect(model.conflict == nil)
+        #expect(runner.runs == 1)
+    }
+
+    @Test func cancellingKeepsTheEditsAndTheFile() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = try editWhileAnotherToolWrites(root: root, runner: runner)
+        await model.save()
+
+        model.cancelConflict()
+        #expect(model.conflict == nil)
+        #expect(model.hasChanges)
+        #expect(try installed(OverrideKey(display: first), under: root) == theirs.readBack())
+        // The file is still not the one the edits started from.
+        await model.save()
+        #expect(model.conflict?.change == .save)
+        #expect(runner.runs == 0)
+    }
+
+    /// Another tool wrote after the check but before the script: the script refuses to
+    /// replace it, and the person is asked as if the check had caught it.
+    @Test func asksWhenTheFileChangesDuringTheSave() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        let file = OverrideLocations.staged(at: root).userFile(for: key)
+        let data = try theirs.propertyListData()
+        let runner = CountingRunner { try data.write(to: file) }
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        _ = model.add(qhd)
+        let ours = try #require(model.draft?.working)
+
+        await model.save()
+        #expect(runner.runs == 1)
+        #expect(model.conflict?.change == .save)
+        #expect(model.conflict?.current == .contents(data))
+        #expect(model.notice == nil)
+        #expect(model.hasChanges)
+        #expect(try installed(key, under: root) == theirs.readBack())
+
+        await model.proceed(with: try #require(model.conflict))
+        #expect(try installed(key, under: root)?.resolutions == ours.resolutions)
+        #expect(!model.hasChanges)
+    }
+
+    /// The file a save writes is what the next save expects, so saving twice never asks.
+    @Test func savesAgainWithoutAsking() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        _ = model.add(hd)
+        await model.save()
+        _ = model.add(qhd)
+        await model.save()
+        #expect(model.conflict == nil)
+        #expect(runner.runs == 2)
+        #expect(!model.hasChanges)
+    }
+
+    @Test func asksBeforeRemovingAFileThatChanged() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        try install(theirs, under: root)
+
+        await model.removeOverride()
+        #expect(runner.runs == 0)
+        let conflict = try #require(model.conflict)
+        #expect(conflict.change == .remove)
+        #expect(conflict.proceedTitle == "Remove Anyway")
+        #expect(conflict.discardTitle == "Reload")
+        #expect(try installed(key, under: root) == theirs.readBack())
+
+        await model.proceed(with: conflict)
+        #expect(runner.runs == 1)
+        #expect(try installed(key, under: root) == nil)
+        #expect(model.source == .missing)
+        #expect(model.notice?.title == "Override removed")
+    }
+
+    @Test func saysWhenAnotherToolRemovedTheFileBeingEdited() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        _ = model.add(qhd)
+        try FileManager.default.removeItem(at: OverrideLocations.staged(at: root).userFile(for: key))
+
+        await model.save()
+        let conflict = try #require(model.conflict)
+        #expect(conflict.message == "It was removed by another app or the resolute command. Your changes are still here. "
+            + "Save Anyway saves them as a new file, and Discard My Changes shows what macOS uses now.")
+        await model.proceed(with: conflict)
+        #expect(runner.runs == 1)
+        #expect(try installed(key, under: root)?.resolutions == model.draft?.working.resolutions)
+    }
+
+    /// Nothing is left to remove, so the only ways on are reading it again and Cancel.
+    @Test func offersNoRemovalOfAFileAnotherToolRemoved() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        try FileManager.default.removeItem(at: OverrideLocations.staged(at: root).userFile(for: key))
+
+        await model.removeOverride()
+        let conflict = try #require(model.conflict)
+        #expect(conflict.current == .absent)
+        #expect(conflict.proceedTitle == nil)
+        await model.proceed(with: conflict)
+        #expect(runner.runs == 0)
+    }
+
+    /// The script waits for the command line's lock, and a command that keeps it gets a
+    /// notice that says so rather than a failed script's status.
+    @Test func saysWhenAnotherCommandKeepsOverridesBusy() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let locations = OverrideLocations.staged(at: root)
+        var installer = OverrideInstaller(locations: locations, runner: ShellCommandRunner(), scriptLock: locations.lockFile)
+        installer.scriptLockTimeout = 1
+        let model = CustomResolutionsModel(
+            service: StubDisplays([first, second]), store: OverrideStore(locations: locations), installer: installer
+        )
+        _ = model.add(hd)
+        // Another command holds the lock, as `OverrideLock` does, for the whole wait.
+        let descriptor = open(locations.lockFile.path(percentEncoded: false), O_RDONLY | O_CREAT, 0o644)
+        try #require(descriptor >= 0)
+        defer { close(descriptor) }
+        try #require(flock(descriptor, LOCK_EX) == 0)
+
+        await model.save()
+        #expect(model.notice?.title == "Another Resolute command is editing overrides")
+        #expect(model.notice?.detail.contains("Your changes are still here") == true)
+        #expect(model.conflict == nil)
+        #expect(model.hasChanges)
+        #expect(try installed(OverrideKey(display: first), under: root) == nil)
+    }
+
+    // MARK: - Coming back to the window
+
+    @Test func readsAChangedFileAgainWithoutAsking() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        model.selectedEntries = [hd]
+        try install(theirs, under: root)
+
+        model.refresh()
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+        #expect(model.selectedEntries.isEmpty)
+        #expect(!model.changedOnDisk)
+        #expect(model.conflict == nil)
+        #expect(model.notice == nil)
+    }
+
+    /// Unsaved edits stay, with a banner; Save then asks first.
+    @Test func keepsUnsavedChangesWhenTheFileChanged() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = try editWhileAnotherToolWrites(root: root, runner: runner)
+        let ours = try #require(model.draft?.working)
+
+        model.refresh()
+        #expect(model.changedOnDisk)
+        #expect(model.hasChanges)
+        #expect(model.draft?.working == ours)
+        await model.save()
+        #expect(model.conflict?.change == .save)
+        #expect(runner.runs == 0)
+        model.cancelConflict()
+
+        // The banner's Reload drops the edits and opens the new version.
+        model.reloadFromDisk()
+        #expect(!model.changedOnDisk)
+        #expect(!model.hasChanges)
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+    }
+
+    @Test func dropsTheBannerWhenTheFileIsBackToWhatWasOpened() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = OverrideLocations.staged(at: root).userFile(for: OverrideKey(display: first))
+        let model = try editWhileAnotherToolWrites(root: root, runner: CountingRunner())
+        model.refresh()
+        #expect(model.changedOnDisk)
+
+        try DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]).propertyListData().write(to: file)
+        model.refresh()
+        #expect(!model.changedOnDisk)
+        #expect(model.hasChanges)
+    }
+
+    /// Without unsaved changes the only version left to go back to is the new one.
+    @Test func revertingAfterTheFileChangedOpensTheNewVersion() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try editWhileAnotherToolWrites(root: root, runner: CountingRunner())
+        model.refresh()
+
+        model.revert()
+        #expect(!model.hasChanges)
+        #expect(!model.changedOnDisk)
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+    }
+
+    @Test func savingAnywayDropsTheBanner() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try editWhileAnotherToolWrites(root: root, runner: CountingRunner())
+        model.refresh()
+        await model.save()
+        await model.proceed(with: try #require(model.conflict))
+        #expect(!model.changedOnDisk)
+        model.refresh()
+        #expect(!model.changedOnDisk)
+        #expect(!model.hasChanges)
+    }
+
+    /// Choosing the display again, from the menu or the list, reads its file again.
+    @Test func readsTheOverrideAgainWhenItsDisplayIsChosenAgain() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        try install(theirs, under: root)
+        model.reopen(selecting: first.id)
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+
+        model.requestSelection(OverrideKey(display: second))
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [qhd]), under: root)
+        model.requestSelection(OverrideKey(display: first))
+        #expect(model.rows.map(\.entry) == [qhd])
+        #expect(!model.changedOnDisk)
+    }
+
+    /// A refresh runs each time the window becomes key; with nothing changed it must not
+    /// touch what the window shows, or every refresh would redraw it.
+    @Test func changesNothingWhenNothingChanged() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: OverrideKey(display: first), resolutions: [qhd]), at: "141320", under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        _ = model.add(qhd)
+        model.selectedEntries = [qhd]
+        #expect(!model.backups.isEmpty)
+
+        let changed = ChangeFlag()
+        withObservationTracking {
+            _ = (model.targets, model.selection, model.draft, model.backups, model.changedOnDisk, model.installedState)
+            _ = (model.source, model.readFailure, model.conflict?.id, model.notice?.id, model.selectedEntries)
+        } onChange: {
+            changed.set()
+        }
+        model.refresh()
+        #expect(!changed.isSet)
+    }
+
+    @Test func refreshesWhichDisplaysHaveOverrides() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        #expect(model.source == .missing)
+        let unplugged = OverrideKey(vendorID: 0x610, productID: 0xA050)
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        try install(DisplayOverride(key: unplugged, productName: "Old Monitor", resolutions: [qhd]), under: root)
+
+        model.refresh()
+        #expect(model.targets.first { $0.key == OverrideKey(display: first) }?.hasOverride == true)
+        #expect(model.targets.first { $0.key == unplugged }?.name == "Old Monitor")
+        // The selected display's new file is read too.
+        #expect(model.source == .installed)
+        #expect(model.rows.map(\.entry) == [hd])
+    }
+
+    @Test func readsAnUnreadableFileAgainOnceItIsFixed() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = OverrideLocations.staged(at: root).userFile(for: OverrideKey(display: first))
+        try stageUnreadable(.notAPropertyList, at: file)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        #expect(model.readFailure != nil)
+
+        try DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]).propertyListData().write(to: file)
+        model.refresh()
+        #expect(model.readFailure == nil)
+        #expect(model.rows.map(\.entry) == [hd])
+    }
+
+    @Test func leavesEverythingAloneWhileSaving() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = Gate()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: GatedRunner(gate: gate))
+        _ = model.add(hd)
+        let save = Task { await model.save() }
+        while !model.isWorking { await Task.yield() }
+        try install(theirs, under: root)
+        model.refresh()
+        #expect(!model.changedOnDisk)
+        await gate.open()
+        await save.value
+        // The script refused to replace the new file, so the save asks.
+        #expect(model.conflict?.change == .save)
+    }
+
+    // MARK: - HiDPI entries without their 1× entry
+
+    /// Opens `first`'s override with `entries`, then removes `removed` as the table does.
+    func model(opening entries: [ScaleResolution], removing removed: [ScaleResolution], root: URL) throws -> CustomResolutionsModel {
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: entries), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        model.selectedEntries = Set(removed)
+        model.removeSelection()
+        return model
+    }
+
+    @Test func notesAHiDPIEntryThatLostIts1xEntry() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let native = ScaleResolution.standard(width: 2560, height: 1440)
+        let scaled = ScaleResolution.hiDPI(width: 1280, height: 720, flags: .standard)
+        let model = try model(opening: [native, scaled], removing: [native], root: root)
+
+        let note = try #require(model.unpairedNote)
+        #expect(note.text == "1280 × 720 HiDPI no longer has its 1× entry at 2560 × 1440, which Resolute and RDM add with each HiDPI entry.")
+        #expect(note.actionTitle == "Add 1× Entry")
+
+        model.addMissingPartners()
+        #expect(model.rows.map(\.entry) == [native, scaled])
+        #expect(!model.hasChanges)
+        #expect(model.unpairedNote == nil)
+    }
+
+    @Test func namesTwoHiDPIEntriesThatLostTheir1xEntries() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lost: [ScaleResolution] = [.standard(width: 3840, height: 2160), .standard(width: 2560, height: 1440)]
+        let model = try model(
+            opening: lost + [hd, .hiDPI(width: 1280, height: 720, flags: .standard)], removing: lost, root: root
+        )
+
+        let note = try #require(model.unpairedNote)
+        #expect(note.text == "1920 × 1080 HiDPI and 1280 × 720 HiDPI no longer have their 1× entries at 3840 × 2160 and 2560 × 1440, which Resolute and RDM add with each HiDPI entry.")
+        #expect(note.actionTitle == "Add 1× Entries")
+        model.addMissingPartners()
+        #expect(!model.hasChanges)
+    }
+
+    @Test func countsTheRestWhenMoreThanTwoLostTheir1xEntries() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lost: [ScaleResolution] = [
+            .standard(width: 5120, height: 2880), .standard(width: 3840, height: 2160),
+            .standard(width: 2560, height: 1440), .standard(width: 2048, height: 1152),
+        ]
+        let scaled: [ScaleResolution] = [qhd, hd, .hiDPI(width: 1280, height: 720, flags: .standard), .hiDPI(width: 1024, height: 576, flags: .standard)]
+        let model = try model(opening: lost + scaled, removing: lost, root: root)
+
+        #expect(model.unpairedNote?.text == "2560 × 1440 HiDPI, 1920 × 1080 HiDPI and 2 more no longer have their 1× entries, which Resolute and RDM add with each HiDPI entry.")
+        model.addMissingPartners()
+        #expect(model.unpairedNote == nil)
+        #expect(!model.hasChanges)
+    }
+
+    /// Apple's files list some HiDPI entries without one; only what this edit did counts.
+    @Test func saysNothingAboutEntriesThatWereAlreadyUnpaired() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try model(opening: [.standard(width: 1280, height: 800), hd], removing: [], root: root)
+        #expect(model.unpairedNote == nil)
+        // A HiDPI entry added and removed again takes the 1× entry it brought along.
+        _ = model.add(qhd)
+        model.selectedEntries = [qhd]
+        model.removeSelection()
+        #expect(model.unpairedNote == nil)
+    }
+
+    // MARK: - Restore Backup…
+
+    /// Writes a backup of `first`'s override the way the installer names them, made at
+    /// 2026-09-21 `time` UTC, and returns its bytes.
+    @discardableResult
+    func stageBackup(_ override: DisplayOverride?, at time: String, under root: URL, bytes: Data? = nil) throws -> Data {
+        let key = OverrideKey(display: first)
+        let folder = OverrideLocations.staged(at: root).backupFolder(for: key)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let data = try bytes ?? override?.propertyListData() ?? Data()
+        try data.write(to: folder.appending(path: "\(key.productFileName)-20260921-\(time).plist"))
+        return data
+    }
+
+    @Test func listsBackupsNewestFirstWithWhatEachHolds() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: key, productName: "Studio", resolutions: [qhd, hd]), at: "101500", under: root)
+        try stageBackup(DisplayOverride(key: key, resolutions: [.standard(width: 1280, height: 800)]), at: "141320", under: root)
+        try stageBackup(nil, at: "120000", under: root, bytes: Data("not a plist".utf8))
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        #expect(model.canRestoreBackup)
+
+        let choices = model.backupChoices()
+        try #require(choices.count == 3)
+        #expect(choices.map(\.backup.fileName) == [
+            "DisplayProductID-1111-20260921-141320.plist",
+            "DisplayProductID-1111-20260921-120000.plist",
+            "DisplayProductID-1111-20260921-101500.plist",
+        ])
+        #expect(choices[0].detail == "1 entry · keeps the display's own name")
+        #expect(choices[0].rows.map(\.entry) == [.standard(width: 1280, height: 800)])
+        #expect(choices[0].canRestore)
+        // Listed with the reason, and cannot be chosen.
+        #expect(choices[1].detail == "Can't be read: it is not a valid property list")
+        #expect(!choices[1].canRestore)
+        #expect(choices[1].rows.isEmpty)
+        #expect(choices[2].detail == "2 entries · sets the name “Studio”")
+        #expect(choices[2].rows.map(\.entry) == [qhd, hd])
+    }
+
+    /// Backup names are in UTC; people read their own time.
+    @Test func showsWhenABackupWasMadeInLocalTime() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try stageBackup(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), at: "141320", under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        let choice = try #require(model.backupChoices().first)
+        let text = choice.dateText(timeZone: try #require(TimeZone(identifier: "America/New_York")), locale: Locale(identifier: "en_US"))
+        #expect(text.contains("2026"))
+        #expect(text.contains("10:13:20"))
+        #expect(!text.contains("14:13"))
+    }
+
+    @Test func offersRestoreOnlyForADisplayWithBackups() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        #expect(!model.canRestoreBackup)
+        #expect(model.backupChoices().isEmpty)
+    }
+
+    /// The backup is written byte for byte, what it replaces is backed up, and the editor
+    /// shows the restored file.
+    @Test func restoresABackupByteForByte() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        let current = DisplayOverride(key: key, resolutions: [hd])
+        try install(current, under: root)
+        // Bytes Resolute would never write itself: the restore must not re-encode them.
+        let text = try #require(String(data: try DisplayOverride(key: key, productName: "Studio", resolutions: [qhd]).propertyListData(), encoding: .utf8))
+        let bytes = try stageBackup(nil, at: "141320", under: root, bytes: Data(text.replacingOccurrences(of: "\t", with: "  ").utf8))
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        let choice = try #require(model.backupChoices().first)
+
+        await model.restore(choice)
+        #expect(runner.runs == 1)
+        let file = OverrideLocations.staged(at: root).userFile(for: key)
+        #expect(try Data(contentsOf: file) == bytes)
+        #expect(model.rows.map(\.entry) == [qhd])
+        #expect(model.productName == "Studio")
+        #expect(!model.hasChanges)
+        #expect(model.notice?.title == "Backup restored")
+        #expect(model.notice?.detail.contains("Reconnect the display or restart your Mac") == true)
+        let store = OverrideStore(locations: .staged(at: root))
+        #expect(store.backups(for: key).count == 2)
+        #expect(model.backupChoices().count == 2)
+        #expect(try store.contents(of: try #require(store.backups(for: key).first)).override == current.readBack())
+        // What was restored is what the next save expects.
+        _ = model.add(hd)
+        await model.save()
+        #expect(model.conflict == nil)
+        #expect(runner.runs == 2)
+    }
+
+    /// A restore replaces the whole file, so unsaved edits would be lost without a word.
+    @Test func waitsForUnsavedChangesBeforeRestoring() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: key, resolutions: [qhd]), at: "141320", under: root)
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        #expect(model.restoreBackupHelp == "Put back an earlier version of this override.")
+        _ = model.add(.standard(width: 1280, height: 800))
+
+        #expect(!model.canRestoreBackup)
+        #expect(model.restoreBackupHelp == "Save or revert your changes before restoring a backup.")
+        await model.restore(try #require(model.backupChoices().first))
+        #expect(runner.runs == 0)
+        #expect(model.hasChanges)
+        #expect(try installed(key, under: root)?.resolutions == [hd])
+    }
+
+    @Test func cancellingThePasswordLeavesEverything() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: key, resolutions: [qhd]), at: "141320", under: root)
+        let locations = OverrideLocations.staged(at: root)
+        let model = CustomResolutionsModel(
+            service: StubDisplays([first, second]), store: OverrideStore(locations: locations),
+            installer: OverrideInstaller(locations: locations, runner: RefusingRunner())
+        )
+
+        await model.restore(try #require(model.backupChoices().first))
+        #expect(model.notice == nil)
+        #expect(model.conflict == nil)
+        #expect(model.rows.map(\.entry) == [hd])
+        #expect(try installed(key, under: root)?.resolutions == [hd])
+        #expect(OverrideStore(locations: locations).backups(for: key).count == 1)
+    }
+
+    @Test func asksBeforeRestoringOverAFileThatChanged() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: key, resolutions: [qhd]), at: "141320", under: root)
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        let choice = try #require(model.backupChoices().first)
+        try install(theirs, under: root)
+
+        await model.restore(choice)
+        #expect(runner.runs == 0)
+        let conflict = try #require(model.conflict)
+        #expect(conflict.change == .restore(choice))
+        #expect(conflict.proceedTitle == "Restore Anyway")
+        #expect(conflict.discardTitle == "Reload")
+
+        await model.proceed(with: conflict)
+        #expect(runner.runs == 1)
+        #expect(model.rows.map(\.entry) == [qhd])
+        #expect(model.notice?.title == "Backup restored")
+    }
+
+    /// Closing the list makes the window key, which reads a changed file again without a
+    /// word; the restore still asks, because the file is not the one the list was opened on.
+    @Test func asksBeforeRestoringWhenTheFileChangedWhileChoosing() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: key, resolutions: [qhd]), at: "141320", under: root)
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        let choice = try #require(model.backupChoices().first)
+        try install(theirs, under: root)
+        model.refresh()
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+
+        await model.restore(choice)
+        #expect(runner.runs == 0)
+        #expect(model.conflict?.change == .restore(choice))
+        #expect(try installed(key, under: root) == theirs.readBack())
+    }
+
+    /// After Remove Override… the file is gone but its backup is not.
+    @Test func restoresAfterTheOverrideWasRemoved() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        await model.removeOverride()
+        #expect(model.source == .missing)
+        #expect(model.canRestoreBackup)
+
+        await model.restore(try #require(model.backupChoices().first))
+        #expect(model.source == .installed)
+        #expect(model.rows.map(\.entry) == [hd])
+        #expect(model.targets.first { $0.key == key }?.hasOverride == true)
+    }
+
     // MARK: - Unreadable overrides
 
     enum Breakage: CaseIterable, Sendable {
@@ -347,6 +1067,59 @@ struct GatedRunner: CommandRunning {
         await model.removeOverride()
         #expect(model.notice == nil)
         #expect(FileManager.default.fileExists(atPath: locations.systemFile(for: secondKey).path(percentEncoded: false)))
+    }
+}
+
+/// What VoiceOver reads in the editor.
+@MainActor
+@Suite struct EditorAccessibilityTests {
+    typealias Row = CustomResolutionsModel.Row
+    typealias Target = CustomResolutionsModel.Target
+
+    /// Apple's 12-byte form of 1728 × 1117 HiDPI: pixel width, pixel height, flags.
+    nonisolated static let appleEntry = PreservedEntry.data(Data([0, 0, 0x0D, 0x80, 0, 0, 0x08, 0xBA, 0, 0, 0, 1]))
+
+    @Test func readsAHiDPIRowInOneGo() {
+        let row = Row(entry: .hiDPI(width: 1280, height: 800, flags: .standard))
+        #expect(row.accessibilityLabel == "1280 by 800, HiDPI, rendered at 2560 by 1600, aspect ratio 16:10")
+    }
+
+    @Test func readsA1xRowWithoutItsPixelsAgain() {
+        let row = Row(entry: .standard(width: 2560, height: 1600))
+        #expect(row.accessibilityLabel == "2560 by 1600, 1x, aspect ratio 16:10")
+    }
+
+    @Test func readsAKeptEntryAsTheModeItNames() {
+        #expect(Row(entry: .preserved(Self.appleEntry)).accessibilityLabel
+            == "1728 by 1117, HiDPI, rendered at 3456 by 2234, aspect ratio 1.55:1")
+        #expect(Row(entry: .preserved(.data(Data([1, 2, 3])))).accessibilityLabel == "3-byte entry, kept as is")
+    }
+
+    /// VoiceOver reads "×" as "multiplied by".
+    @Test(arguments: [
+        ScaleResolution.hiDPI(width: 1920, height: 1080, flags: .standard), .standard(width: 3840, height: 2160),
+        .preserved(appleEntry), .preserved(.data(Data([0, 0, 0x0D, 0x80, 0, 0, 0x08, 0xBA]))),
+    ])
+    func neverSaysTimes(_ entry: ScaleResolution) {
+        #expect(!Row(entry: entry).accessibilityLabel.isEmpty)
+        #expect(!Row(entry: entry).accessibilityLabel.contains("×"))
+    }
+
+    @Test func saysWhetherADisplayIsConnectedAndHasAnOverride() {
+        let key = OverrideKey(vendorID: 0x10AC, productID: 0x1111)
+        #expect(Target(key: key, name: "Studio", isConnected: true, hasOverride: true).accessibilityLabel
+            == "Studio, connected, has a custom override")
+        #expect(Target(key: key, name: "Studio", isConnected: true, hasOverride: false).accessibilityLabel
+            == "Studio, connected, no custom override")
+        #expect(Target(key: key, name: "Old Monitor", isConnected: false, hasOverride: true).accessibilityLabel
+            == "Old Monitor, not connected, has a custom override")
+    }
+}
+
+extension DisplayOverride {
+    /// This override as reading its file back gives it.
+    func readBack() throws -> DisplayOverride {
+        try DisplayOverride(key: key, propertyList: propertyListData())
     }
 }
 

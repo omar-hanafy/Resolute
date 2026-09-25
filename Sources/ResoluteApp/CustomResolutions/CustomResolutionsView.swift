@@ -26,6 +26,21 @@ struct CustomResolutionsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .alert(
+                model.conflict?.title ?? "",
+                isPresented: Binding(get: { model.conflict != nil }, set: { if !$0 { model.cancelConflict() } }),
+                presenting: model.conflict
+            ) { conflict in
+                // Each button acts on the conflict it was shown for: dismissing the alert
+                // may clear `model.conflict` before the action runs.
+                if let proceed = conflict.proceedTitle {
+                    Button(proceed, role: .destructive) { Task { await model.proceed(with: conflict) } }
+                }
+                Button(conflict.discardTitle) { model.reloadFromDisk() }
+                Button("Cancel", role: .cancel) {}
+            } message: { conflict in
+                Text(conflict.message)
+            }
         }
         .frame(minWidth: 780, minHeight: 500)
         // Nothing may change while a save waits for the administrator password.
@@ -91,6 +106,8 @@ private struct TargetRow: View {
             Image(systemName: "display")
                 .foregroundStyle(target.isConnected ? .primary : .secondary)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(target.accessibilityLabel)
     }
 }
 
@@ -106,17 +123,18 @@ private struct UnreadableOverride: View {
         } description: {
             Text(reason)
         } actions: {
-            if model.source == .installed {
-                InstalledOverrideActions(model: model)
-            }
+            OverrideFileActions(model: model)
         }
     }
 }
 
-/// Remove Override… and Show in Finder, for an override file under the user root.
-private struct InstalledOverrideActions: View {
+/// Remove Override… and Show in Finder, for an override file under the user root, and
+/// Restore Backup… for a display with backups.
+private struct OverrideFileActions: View {
     let model: CustomResolutionsModel
     @State private var isConfirmingRemoval = false
+    @State private var isChoosingBackup = false
+    @State private var chosenBackup: CustomResolutionsModel.BackupChoice?
 
     var body: some View {
         if model.canRemoveOverride {
@@ -127,7 +145,87 @@ private struct InstalledOverrideActions: View {
                     Text("macOS goes back to the display's default resolutions after you reconnect it or restart. A backup is kept.")
                 }
         }
-        Button("Show in Finder") { model.revealInFinder() }
+        if !model.backups.isEmpty {
+            Button("Restore Backup…") { isChoosingBackup = true }
+                .disabled(!model.canRestoreBackup)
+                .help(model.restoreBackupHelp)
+                // Restores once the sheet is gone, so a question about the file can show.
+                .sheet(isPresented: $isChoosingBackup, onDismiss: restoreChosenBackup) {
+                    RestoreBackupSheet(model: model) { chosenBackup = $0 }
+                }
+        }
+        if model.source == .installed {
+            Button("Show in Finder") { model.revealInFinder() }
+        }
+    }
+
+    private func restoreChosenBackup() {
+        guard let choice = chosenBackup else { return }
+        chosenBackup = nil
+        Task { await model.restore(choice) }
+    }
+}
+
+/// Groups of buttons in one row, the last group at the trailing edge; or, when the row
+/// would cut their titles short, one group per row, the last still trailing. Unlike two
+/// alternative layouts, each button stays one view, with its own sheets and dialogs.
+struct ActionBarLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let row = rowWidth(sizes)
+        let width = proposal.width ?? row
+        if row <= width {
+            return CGSize(width: width, height: sizes.map(\.height).max() ?? 0)
+        }
+        let height = sizes.map(\.height).reduce(0, +) + spacing * CGFloat(max(sizes.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let oneRow = rowWidth(sizes) <= bounds.width
+        var x = bounds.minX
+        var y = bounds.minY
+        for (index, subview) in subviews.enumerated() {
+            let size = sizes[index]
+            let isLast = index == subviews.count - 1
+            let origin = CGPoint(x: isLast ? bounds.maxX - size.width : x, y: oneRow ? bounds.midY - size.height / 2 : y)
+            subview.place(at: origin, anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            y += size.height + spacing
+        }
+    }
+
+    private func rowWidth(_ sizes: [CGSize]) -> CGFloat {
+        sizes.map(\.width).reduce(0, +) + spacing * CGFloat(max(sizes.count - 1, 0))
+    }
+}
+
+/// Says the file changed on disk under unsaved changes, which stay until Reload.
+private struct ChangedOnDiskBanner: View {
+    let model: CustomResolutionsModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("This override changed on disk after you opened it.")
+                Text("Your changes are still here. Saving asks before replacing it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button("Reload") { model.reloadFromDisk() }
+                .help("Discard your changes and open the version on disk")
+        }
+        .padding(10)
+        .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -146,21 +244,31 @@ private struct OverrideEditor: View {
                     .textSelection(.enabled)
             }
 
+            if model.changedOnDisk {
+                ChangedOnDiskBanner(model: model)
+            }
+
             LabeledContent("Name shown by macOS") {
                 TextField("Name shown by macOS", text: $model.productName, prompt: Text("The display's own name"))
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
             }
 
+            // VoiceOver reads each row once, from its first cell: the whole row, with sizes
+            // it would otherwise read as multiplications.
             Table(model.rows, selection: $model.selectedEntries) {
-                TableColumn("Resolution") { row in Text(row.resolution).monospacedDigit() }
-                TableColumn("Type") { row in Text(row.kind) }
+                TableColumn("Resolution") { row in
+                    Text(row.resolution).monospacedDigit().accessibilityLabel(row.accessibilityLabel)
+                }
+                TableColumn("Type") { row in Text(row.kind).accessibilityHidden(true) }
                     .width(min: 60, ideal: 80)
                 TableColumn("Rendered At") { row in
-                    Text(row.pixels).monospacedDigit().foregroundStyle(.secondary)
+                    Text(row.pixels).monospacedDigit().foregroundStyle(.secondary).accessibilityHidden(true)
                 }
-                TableColumn("Aspect Ratio") { row in Text(row.aspectRatio).foregroundStyle(.secondary) }
-                    .width(min: 70, ideal: 90)
+                TableColumn("Aspect Ratio") { row in
+                    Text(row.aspectRatio).foregroundStyle(.secondary).accessibilityHidden(true)
+                }
+                .width(min: 70, ideal: 90)
             }
             // Delete does what the Remove button does; nil turns it off while saving.
             .onDeleteCommand(perform: model.canRemoveSelection ? { model.removeSelection() } : nil)
@@ -171,6 +279,19 @@ private struct OverrideEditor: View {
                         systemImage: "rectangle.dashed",
                         description: Text("Add a resolution to create an override for this display.")
                     )
+                }
+            }
+
+            if let note = model.unpairedNote {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+                    Text(note.text)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button(note.actionTitle) { model.addMissingPartners() }
                 }
             }
 
@@ -197,20 +318,22 @@ private struct OverrideEditor: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
-            HStack {
-                if model.source == .installed {
-                    InstalledOverrideActions(model: model)
+            // At the window's narrowest, Revert and Save… go under the file buttons.
+            ActionBarLayout {
+                HStack {
+                    OverrideFileActions(model: model)
                 }
-                Spacer()
-                if model.isWorking {
-                    ProgressView().controlSize(.small)
+                HStack {
+                    if model.isWorking {
+                        ProgressView().controlSize(.small)
+                    }
+                    Button("Revert") { model.revert() }
+                        .disabled(!model.hasChanges || model.isWorking)
+                    Button("Save…") { Task { await model.save() } }
+                        .keyboardShortcut("s", modifiers: .command)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!model.canSave)
                 }
-                Button("Revert") { model.revert() }
-                    .disabled(!model.hasChanges || model.isWorking)
-                Button("Save…") { Task { await model.save() } }
-                    .keyboardShortcut("s", modifiers: .command)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!model.canSave)
             }
         }
         .padding(20)

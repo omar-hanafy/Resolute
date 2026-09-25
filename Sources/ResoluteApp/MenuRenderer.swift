@@ -29,7 +29,9 @@ enum MenuRenderer {
             item.isEnabled = model.isEnabled
             item.state = model.isChecked ? .on : .off
             if let symbolName = model.symbolName {
-                item.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+                item.image = NSImage(
+                    systemSymbolName: symbolName, accessibilityDescription: accessibilityDescription(forSymbol: symbolName)
+                )
             }
             if let badge = model.badge {
                 item.badge = NSMenuItemBadge(string: badge)
@@ -43,6 +45,15 @@ enum MenuRenderer {
                 item.submenu = submenu
             }
             return item
+        }
+    }
+
+    /// What a menu symbol means, for VoiceOver. Nil for a decorative one, whose item's
+    /// title already says it: only the hidden-mode sign marks something the title doesn't.
+    static func accessibilityDescription(forSymbol name: String) -> String? {
+        switch name {
+        case "exclamationmark.triangle": "Hidden mode"
+        default: nil
         }
     }
 

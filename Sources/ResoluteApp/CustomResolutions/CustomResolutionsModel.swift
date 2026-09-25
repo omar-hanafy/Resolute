@@ -19,6 +19,15 @@ final class CustomResolutionsModel {
             let ids = "Vendor \(String(key.vendorID, radix: 16)) · Product \(String(key.productID, radix: 16))"
             return hasOverride ? "\(ids) · Custom" : ids
         }
+
+        /// What VoiceOver reads for the display in the list.
+        var accessibilityLabel: String {
+            [
+                name,
+                isConnected ? "connected" : "not connected",
+                hasOverride ? "has a custom override" : "no custom override",
+            ].joined(separator: ", ")
+        }
     }
 
     /// A row in the resolutions table, identified by its entry, which is unique in a list:
@@ -33,6 +42,54 @@ final class CustomResolutionsModel {
         var aspectRatio: String {
             entry.pixelSize.map { AspectRatio(width: $0.width, height: $0.height).description } ?? "—"
         }
+
+        /// The whole row as VoiceOver reads it: "1280 by 800, HiDPI, rendered at 2560 by
+        /// 1600, aspect ratio 16:10". Sizes say "by": "×" is read as "multiplied by".
+        var accessibilityLabel: String {
+            var parts = [resolution.replacingOccurrences(of: "×", with: "by")]
+            switch entry.describedMode {
+            case .hiDPI?:
+                parts.append("HiDPI")
+                if let pixels = entry.pixelSize {
+                    parts.append("rendered at \(pixels.width) by \(pixels.height)")
+                }
+            case .standard?:
+                parts.append("1x")
+            case .preserved?, nil:
+                parts.append("kept as is")
+            }
+            if entry.pixelSize != nil {
+                parts.append("aspect ratio \(aspectRatio)")
+            }
+            return parts.joined(separator: ", ")
+        }
+    }
+
+    /// The note under the table when an edit leaves HiDPI entries without their 1× entry,
+    /// and the title of its button, which adds them back.
+    struct UnpairedNote: Equatable {
+        var text: String
+        var actionTitle: String
+
+        /// Names up to two entries, then counts the rest.
+        init(_ entries: [ScaleResolution]) {
+            let names = entries.map { "\($0.sizeText) \($0.kindText)" }
+            let reason = "which Resolute and RDM add with each HiDPI entry."
+            switch entries.count {
+            case 1:
+                text = "\(names[0]) no longer has its 1× entry at \(Self.pixels(entries[0])), \(reason)"
+            case 2:
+                text = "\(names[0]) and \(names[1]) no longer have their 1× entries at "
+                    + "\(Self.pixels(entries[0])) and \(Self.pixels(entries[1])), \(reason)"
+            default:
+                text = "\(names[0]), \(names[1]) and \(entries.count - 2) more no longer have their 1× entries, \(reason)"
+            }
+            actionTitle = entries.count == 1 ? "Add 1× Entry" : "Add 1× Entries"
+        }
+
+        private static func pixels(_ entry: ScaleResolution) -> String {
+            entry.pixelSize.map { "\($0.width) × \($0.height)" } ?? "its pixel size"
+        }
     }
 
     /// A message shown in an alert.
@@ -40,6 +97,110 @@ final class CustomResolutionsModel {
         let id = UUID()
         var title: String
         var detail: String
+    }
+
+    /// A backup Restore Backup… offers, read when the list opens.
+    struct BackupChoice: Identifiable, Equatable {
+        var backup: OverrideBackup
+        /// The override the backup holds, and its bytes, which a restore writes as they are.
+        var contents: (override: DisplayOverride, data: Data)?
+        /// Why the backup can't be read; it is listed, but cannot be chosen.
+        var failure: String?
+        /// What the installed file held for the editor when the list was read: the file
+        /// the person chose to replace, which the restore checks is still there.
+        var replacing: OverrideFileState?
+
+        var id: URL { backup.id }
+        var canRestore: Bool { contents != nil }
+
+        /// "2 entries · sets the name “Studio”", or why it can't be read.
+        var detail: String {
+            guard let override = contents?.override else { return "Can't be read: \(failure ?? "unknown reason")" }
+            let count = override.resolutions.count
+            let entries = count == 1 ? "1 entry" : "\(count) entries"
+            let name = override.productName.map { "sets the name “\($0)”" } ?? "keeps the display's own name"
+            return "\(entries) · \(name)"
+        }
+
+        /// The backup's entries, as the table shows them.
+        var rows: [Row] {
+            (contents?.override.resolutions ?? []).map { Row(entry: $0) }
+        }
+
+        /// When the backup was made. Its name has the time in UTC; people read their own.
+        func dateText(timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+            backup.date.formatted(Date.FormatStyle(date: .abbreviated, time: .standard, locale: locale, timeZone: timeZone))
+        }
+
+        static func == (lhs: BackupChoice, rhs: BackupChoice) -> Bool {
+            lhs.backup == rhs.backup && lhs.contents?.data == rhs.contents?.data && lhs.failure == rhs.failure
+                && lhs.replacing == rhs.replacing
+        }
+    }
+
+    /// A save, removal or restore held back because the override's file changed after it
+    /// was read, by another app or the `resolute` command. No password is asked for until
+    /// the person has seen this.
+    struct Conflict: Identifiable {
+        enum Change: Equatable {
+            case save
+            case remove
+            case restore(BackupChoice)
+
+            var failureTitle: String {
+                switch self {
+                case .save: "The override could not be saved"
+                case .remove: "The override could not be removed"
+                case .restore: "The backup could not be restored"
+                }
+            }
+        }
+
+        let id = UUID()
+        var change: Change
+        var key: OverrideKey
+        var displayName: String
+        /// What the file holds now. Going ahead expects exactly this, so a change made after
+        /// this read is caught again.
+        var current: OverrideFileState
+        var hasUnsavedChanges: Bool
+
+        var title: String { "The override for \(displayName) changed after it was opened" }
+
+        var message: String {
+            let removed = current == .absent
+            var text = removed
+                ? "It was removed by another app or the resolute command."
+                : "It was changed by another app or the resolute command."
+            if hasUnsavedChanges { text += " Your changes are still here." }
+            switch change {
+            case .save where removed:
+                text += " \(proceedTitle ?? "") saves them as a new file, and \(discardTitle) shows what macOS uses now."
+            case .save:
+                text += " \(proceedTitle ?? "") replaces the file with them, and \(discardTitle) opens it as it is now."
+            case .remove where removed:
+                text += " \(discardTitle) shows what macOS uses now."
+            case .remove:
+                text += " \(proceedTitle ?? "") removes it as it is now, keeping a backup, and \(discardTitle) opens it first."
+            case .restore where removed:
+                text += " \(proceedTitle ?? "") puts the backup back, and \(discardTitle) shows what macOS uses now."
+            case .restore:
+                text += " \(proceedTitle ?? "") replaces it with the backup, keeping a backup of it, and \(discardTitle) opens it first."
+            }
+            return text
+        }
+
+        /// Save Anyway, Remove Anyway or Restore Anyway; nil when there is nothing left to do.
+        var proceedTitle: String? {
+            switch change {
+            case .save: "Save Anyway"
+            case .remove: current == .absent ? nil : "Remove Anyway"
+            case .restore: "Restore Anyway"
+            }
+        }
+
+        /// Reading the file again drops unsaved changes, when there are any.
+        var discardTitle: String { hasUnsavedChanges ? "Discard My Changes" : "Reload" }
     }
 
     private(set) var targets: [Target] = []
@@ -59,19 +220,29 @@ final class CustomResolutionsModel {
     /// Why the selected display's override can't be read. The window shows it in place of
     /// the editor, so the display stays selected and its file can still be removed.
     private(set) var readFailure: String?
+    /// What the installed file (the one a save replaces) held at the read that loaded the
+    /// override on screen. Nil when that file could not be read, such as without permission.
+    private(set) var installedState: OverrideFileState?
+    /// Backups of the selected display's override, newest first.
+    private(set) var backups: [OverrideBackup] = []
     private(set) var isWorking = false
     /// A display someone picked while the current one has unsaved changes.
     private(set) var pendingSelection: OverrideKey?
+    /// A change waiting for the person to decide, because the file changed on disk.
+    private(set) var conflict: Conflict?
+    /// True when the installed file changed after it was read while there are unsaved
+    /// changes: the editor keeps them and shows a banner, and Save asks first.
+    private(set) var changedOnDisk = false
     var notice: Notice?
 
     @ObservationIgnored private let service: any DisplayControlling
     @ObservationIgnored let store: OverrideStore
-    @ObservationIgnored private let installer: OverrideInstaller
+    @ObservationIgnored let installer: OverrideInstaller
 
     init(
         service: any DisplayControlling,
         store: OverrideStore = OverrideStore(),
-        installer: OverrideInstaller = OverrideInstaller(runner: AdminCommandRunner())
+        installer: OverrideInstaller = .privileged
     ) {
         self.service = service
         self.store = store
@@ -95,9 +266,26 @@ final class CustomResolutionsModel {
     /// in the file's place is shown, never deleted with administrator rights.
     var canRemoveOverride: Bool {
         guard let selection, source == .installed else { return false }
-        var isFolder: ObjCBool = false
         let path = store.locations.userFile(for: selection).path(percentEncoded: false)
-        return FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) && !isFolder.boolValue
+        return FileManager.default.fileExists(atPath: path) && !hasFolder(inPlaceOf: selection)
+    }
+
+    /// Whether Restore Backup… can run: the display has backups, and no unsaved changes
+    /// would be lost. A folder in the file's place is never written over.
+    var canRestoreBackup: Bool {
+        guard let selection, !backups.isEmpty, !hasChanges, !isWorking else { return false }
+        return !hasFolder(inPlaceOf: selection)
+    }
+
+    var restoreBackupHelp: String {
+        hasChanges ? "Save or revert your changes before restoring a backup." : "Put back an earlier version of this override."
+    }
+
+    /// Whether a folder sits where `key`'s installed file goes.
+    private func hasFolder(inPlaceOf key: OverrideKey) -> Bool {
+        var isFolder: ObjCBool = false
+        let path = store.locations.userFile(for: key).path(percentEncoded: false)
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) && isFolder.boolValue
     }
 
     /// Whether Remove and Delete are available.
@@ -145,7 +333,7 @@ final class CustomResolutionsModel {
            let edited = targets.first(where: { $0.key == selection }) {
             result.append(Target(key: selection, name: edited.name, isConnected: false, hasOverride: edited.hasOverride))
         }
-        targets = result
+        if result != targets { targets = result }
         if let selection, result.contains(where: { $0.key == selection }) { return }
         select(result.first?.key)
     }
@@ -184,17 +372,56 @@ final class CustomResolutionsModel {
         requestSelection(OverrideKey(display: display))
     }
 
+    /// For the window shown from the menu: selects `displayID` when one is given, and
+    /// reads everything again, also when that display was selected already.
+    func reopen(selecting displayID: CGDirectDisplayID?) {
+        select(displayID: displayID)
+        refresh()
+    }
+
+    /// Reads the displays and the selected override again, for a window that comes back
+    /// into use: another app or `resolute` may have changed them meanwhile. A changed file
+    /// is read again, unless there are unsaved changes, which stay, under a banner.
+    func refresh() {
+        // A pending decision about the file stays as it was shown.
+        guard !isWorking, conflict == nil else { return }
+        reloadTargets()
+        guard let selection else { return }
+        // Assigned only when different, so a refresh that finds nothing new leaves the
+        // window alone: this runs whenever the window becomes key.
+        let listed = store.backups(for: selection)
+        if listed != backups { backups = listed }
+        // An override that could not be read has nothing to lose.
+        guard draft != nil else {
+            load()
+            return
+        }
+        let changed = (try? store.installedState(for: selection)) != installedState
+        if changed, !hasChanges {
+            load()
+        } else if changed != changedOnDisk {
+            changedOnDisk = changed
+        }
+    }
+
+    /// Reads the selected display's override, and what its installed file holds, afresh.
     private func load() {
         selectedEntries = []
         readFailure = nil
+        conflict = nil
+        changedOnDisk = false
         guard let selection else {
             draft = nil
+            installedState = nil
+            backups = []
             return
         }
+        backups = store.backups(for: selection)
         do {
-            let (override, source) = try store.editableOverride(for: selection)
-            draft = OverrideDraft(override)
-            self.source = source
+            let file = try store.editableFile(for: selection)
+            draft = OverrideDraft(file.override)
+            source = file.source
+            installedState = file.installedState
         } catch {
             draft = nil
             readFailure = error.localizedDescription
@@ -203,8 +430,12 @@ final class CustomResolutionsModel {
             let installed = store.locations.userFile(for: selection).path(percentEncoded: false)
             if case ResoluteError.overrideUnreadable(installed, _) = error {
                 source = .installed
+                // Its bytes, when only they are wrong, so that removing it checks them too.
+                installedState = try? store.installedState(for: selection)
             } else {
                 source = .system
+                // Apple's file is read only when there is no installed one.
+                installedState = .absent
             }
         }
     }
@@ -222,6 +453,22 @@ final class CustomResolutionsModel {
         }
     }
 
+    /// Shown when this edit left HiDPI entries without the 1× entry at their pixel size.
+    var unpairedNote: UnpairedNote? {
+        guard let entries = draft?.newlyUnpairedHiDPIEntries, !entries.isEmpty else { return nil }
+        return UnpairedNote(entries)
+    }
+
+    /// Adds back the 1× entries `unpairedNote` names.
+    func addMissingPartners() {
+        guard !isWorking, let entries = draft?.newlyUnpairedHiDPIEntries else { return }
+        for entry in entries {
+            guard let pixels = entry.pixelSize else { continue }
+            // One too large to add stays named in the note.
+            _ = try? draft?.add(.standard(width: pixels.width, height: pixels.height))
+        }
+    }
+
     /// Removes exactly the selected entries, and the 1× entries this edit added with them.
     func removeSelection() {
         guard !isWorking else { return }
@@ -232,55 +479,183 @@ final class CustomResolutionsModel {
 
     func revert() {
         guard !isWorking else { return }
+        // The version the edits started from is gone, so going back opens the new one.
+        guard !changedOnDisk else {
+            load()
+            return
+        }
         draft?.revert()
         selectedEntries = []
     }
 
     func save() async {
-        guard let draft, let key = selection, canSave else { return }
-        let written = draft.working
-        isWorking = true
-        defer { isWorking = false }
-        do {
-            try await installer.install(written)
-            // Editing is locked while saving, so this is the version that was written.
-            if selection == key, self.draft?.working == written {
-                self.draft?.markSaved()
-                source = .installed
+        guard let key = selection, canSave else { return }
+        await attempt(.save, on: key)
+    }
+
+    /// Removes the installed file. One that another tool removed since it was read goes
+    /// through the check too, which says so, rather than the button doing nothing.
+    func removeOverride() async {
+        guard !isWorking, let selection, source == .installed, !hasFolder(inPlaceOf: selection) else { return }
+        await attempt(.remove, on: selection)
+    }
+
+    // MARK: - Backups
+
+    /// The selected display's backups, newest first, with what each holds.
+    func backupChoices() -> [BackupChoice] {
+        guard let selection else { return [] }
+        return store.backups(for: selection).map { backup in
+            var choice = BackupChoice(backup: backup, replacing: installedState)
+            do {
+                choice.contents = try store.contents(of: backup)
+            } catch ResoluteError.overrideUnreadable(_, let reason) {
+                choice.failure = reason
+            } catch {
+                choice.failure = error.localizedDescription
             }
-            reloadTargets()
-            notice = Notice(
-                title: "Custom resolutions saved",
-                detail: "Reconnect the display or restart your Mac to use them."
-            )
-        } catch let error as ResoluteError where error == .cancelled {
-            return
-        } catch {
-            notice = Notice(title: "The override could not be saved", detail: error.localizedDescription)
+            return choice
         }
     }
 
-    func removeOverride() async {
-        guard !isWorking, let selection, canRemoveOverride else { return }
+    /// Writes `choice`'s backup back as it is; the installer backs up the file it replaces.
+    /// It asks first when the file is no longer the one the list was read for, even if the
+    /// editor has read the new one since, as it does without a word when the list closes.
+    func restore(_ choice: BackupChoice) async {
+        guard let key = selection, choice.backup.key == key, choice.canRestore, canRestoreBackup else { return }
+        await attempt(.restore(choice), on: key, expecting: choice.replacing)
+    }
+
+    // MARK: - Changes on disk
+
+    /// Goes ahead with a change after the person has seen that the file changed: Save
+    /// Anyway or Remove Anyway. It expects the file to hold what `conflict` read, so a
+    /// change made after that is caught again.
+    func proceed(with conflict: Conflict) async {
+        if self.conflict?.id == conflict.id { self.conflict = nil }
+        guard !isWorking, conflict.key == selection, conflict.proceedTitle != nil else { return }
+        await run(conflict.change, on: conflict.key, expecting: conflict.current)
+    }
+
+    /// Reads the selected override again, dropping unsaved changes: Discard My Changes,
+    /// and Reload.
+    func reloadFromDisk() {
+        guard !isWorking else { return }
+        load()
+        reloadTargets()
+    }
+
+    func cancelConflict() {
+        conflict = nil
+    }
+
+    /// Runs `change` when the installed file still holds `expected`, by default what it held
+    /// when the override on screen was read; otherwise sets `conflict`, before anything
+    /// asks for a password.
+    private func attempt(_ change: Conflict.Change, on key: OverrideKey) async {
+        await attempt(change, on: key, expecting: installedState)
+    }
+
+    private func attempt(_ change: Conflict.Change, on key: OverrideKey, expecting expected: OverrideFileState?) async {
+        // Unknown when the file could not be read; the script then checks nothing either.
+        if let expected {
+            let current: OverrideFileState
+            do {
+                current = try store.installedState(for: key)
+            } catch {
+                notice = Notice(title: change.failureTitle, detail: error.localizedDescription)
+                return
+            }
+            guard current == expected else {
+                conflict = makeConflict(change, on: key, current: current)
+                return
+            }
+        }
+        await run(change, on: key, expecting: expected)
+    }
+
+    /// Runs `change` through the installer, whose script checks again that the file holds
+    /// `state`: someone may change it between the check and the password prompt.
+    private func run(_ change: Conflict.Change, on key: OverrideKey, expecting state: OverrideFileState?) async {
         isWorking = true
         defer { isWorking = false }
         do {
-            try await installer.remove(selection)
-            load()
+            switch change {
+            case .save:
+                guard let written = draft?.working else { return }
+                let data = try written.propertyListData()
+                try await installer.install(contents: data, for: key, expecting: state)
+                // Editing is locked while saving, so this is the version that was written.
+                if selection == key, draft?.working == written {
+                    draft?.markSaved()
+                    source = .installed
+                    installedState = .contents(data)
+                    changedOnDisk = false
+                    backups = store.backups(for: key)
+                }
+                notice = Notice(
+                    title: "Custom resolutions saved",
+                    detail: "Reconnect the display or restart your Mac to use them."
+                )
+            case .remove:
+                try await installer.remove(key, expecting: state)
+                load()
+                notice = Notice(
+                    title: "Override removed",
+                    detail: "A backup is in \(store.locations.backupRoot.path(percentEncoded: false)). Reconnect the display or restart your Mac to go back to its default resolutions."
+                )
+            case .restore(let choice):
+                guard let data = choice.contents?.data else { return }
+                try await installer.install(contents: data, for: key, expecting: state)
+                load()
+                notice = Notice(
+                    title: "Backup restored",
+                    detail: "Reconnect the display or restart your Mac to use it."
+                        + (state == .absent ? "" : " The file it replaced is in the backups too.")
+                )
+            }
             reloadTargets()
-            notice = Notice(
-                title: "Override removed",
-                detail: "A backup is in \(store.locations.backupRoot.path(percentEncoded: false)). Reconnect the display or restart your Mac to go back to its default resolutions."
-            )
-        } catch let error as ResoluteError where error == .cancelled {
+        } catch ResoluteError.cancelled {
             return
+        } catch ResoluteError.overrideChanged {
+            // Changed between the check and the script: ask as if the check had caught it.
+            do {
+                conflict = makeConflict(change, on: key, current: try store.installedState(for: key))
+            } catch {
+                notice = Notice(title: change.failureTitle, detail: error.localizedDescription)
+            }
+        } catch ResoluteError.overridesBusy {
+            notice = Notice(
+                title: "Another Resolute command is editing overrides",
+                detail: "It has been editing them for too long. Try again when it has finished."
+                    + (hasChanges ? " Your changes are still here." : "")
+            )
         } catch {
-            notice = Notice(title: "The override could not be removed", detail: error.localizedDescription)
+            notice = Notice(title: change.failureTitle, detail: error.localizedDescription)
         }
+    }
+
+    private func makeConflict(_ change: Conflict.Change, on key: OverrideKey, current: OverrideFileState) -> Conflict {
+        Conflict(
+            change: change,
+            key: key,
+            displayName: targets.first { $0.key == key }?.name ?? "this display",
+            current: current,
+            hasUnsavedChanges: hasChanges
+        )
     }
 
     func revealInFinder() {
         guard let selection, source == .installed else { return }
         NSWorkspace.shared.activateFileViewerSelecting([store.locations.userFile(for: selection)])
+    }
+}
+
+extension OverrideInstaller {
+    /// The app's installer: scripts run as root after the password prompt. They take the
+    /// command line's lock themselves, because the app runs as the user and cannot create
+    /// the lock file, so a save never interleaves with `sudo resolute overrides add`.
+    static var privileged: OverrideInstaller {
+        OverrideInstaller(runner: AdminCommandRunner(), scriptLock: OverrideLocations.standard.lockFile)
     }
 }

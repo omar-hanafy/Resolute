@@ -4,10 +4,12 @@ import SwiftUI
 
 /// Owns the Custom Resolutions window.
 @MainActor
-final class CustomResolutionsWindowController: NSWindowController {
+final class CustomResolutionsWindowController: NSWindowController, NSWindowDelegate {
     let model: CustomResolutionsModel
 
-    init(model: CustomResolutionsModel) {
+    /// `frameAutosaveName` keeps the window's frame in the user defaults between launches;
+    /// nil leaves them alone, as tests must.
+    init(model: CustomResolutionsModel, frameAutosaveName: String? = "CustomResolutions") {
         self.model = model
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 860, height: 560),
@@ -20,8 +22,16 @@ final class CustomResolutionsWindowController: NSWindowController {
         window.contentViewController = NSHostingController(rootView: CustomResolutionsView(model: model))
         window.setContentSize(NSSize(width: 860, height: 560))
         window.center()
-        window.setFrameAutosaveName("CustomResolutions")
+        if let frameAutosaveName {
+            window.setFrameAutosaveName(frameAutosaveName)
+        }
         super.init(window: window)
+        window.delegate = self
+        // Another app or `resolute` may change overrides while Resolute is in the background.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(applicationDidBecomeActive(_:)),
+            name: NSApplication.didBecomeActiveNotification, object: nil
+        )
     }
 
     @available(*, unavailable)
@@ -29,9 +39,9 @@ final class CustomResolutionsWindowController: NSWindowController {
         fatalError("init(coder:) is not supported")
     }
 
-    /// Shows the window, selecting `displayID` when one is given.
+    /// Shows the window, selecting `displayID` when one is given, with what is on disk now.
     func show(selecting displayID: CGDirectDisplayID?) {
-        model.select(displayID: displayID)
+        model.reopen(selecting: displayID)
         NSApp.activate()
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
@@ -41,5 +51,15 @@ final class CustomResolutionsWindowController: NSWindowController {
     func displaysDidChange() {
         guard window?.isVisible == true else { return }
         model.reloadTargets()
+    }
+
+    /// Also after a sheet or an alert on the window closes.
+    func windowDidBecomeKey(_ notification: Notification) {
+        model.refresh()
+    }
+
+    @objc private func applicationDidBecomeActive(_ notification: Notification) {
+        guard window?.isVisible == true else { return }
+        model.refresh()
     }
 }
