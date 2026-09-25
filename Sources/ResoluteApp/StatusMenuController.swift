@@ -39,7 +39,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     static func nodes(
         service: any DisplayControlling,
         preferences: Preferences,
-        loginItem: LoginItemController,
+        loginItem: any LoginItemControlling,
         showsDetails: Bool
     ) -> [MenuNode] {
         MenuModel.build(
