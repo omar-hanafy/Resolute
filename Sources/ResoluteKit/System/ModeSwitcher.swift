@@ -156,8 +156,10 @@ public struct ModeSwitcher: Sendable {
     /// neither mode, which one that has only just come back may do for a moment, so callers
     /// try again; `logsFailures` lets them log only the first failure.
     public func finish(_ pending: PendingRestore, logsFailures: Bool = true) throws -> RestoreProgress {
-        guard isOnline(pending.displayID) else { return .waiting }
-        if let current = currentModeID(of: pending.displayID), current != pending.trialModeID {
+        // Both questions go to one snapshot: CoreGraphics reports a placeholder mode for a
+        // display that has gone away, so its mode is only read while it is listed.
+        guard let display = service.displays().first(where: { $0.id == pending.displayID }) else { return .waiting }
+        if let current = Self.otherModeShown(by: display, than: pending.trialModeID) {
             Self.log.notice("""
                 \(pending.displayName, privacy: .public) is back in mode \(current), not the mode on trial, \
                 so it is left as it is
@@ -184,6 +186,17 @@ public struct ModeSwitcher: Sendable {
                 so mode \(pending.modeID) was not put back
                 """)
         }
+    }
+
+    /// The mode `display` shows when it is one it lists other than `trialModeID`. Judged only
+    /// when the display lists that mode too: one that dropped off while its snapshot was
+    /// taken lists only CoreGraphics' placeholder, which says nothing about its mode.
+    private static func otherModeShown(by display: Display, than trialModeID: Int32) -> Int32? {
+        let lists = { (modeID: Int32) in display.modes.contains { $0.modeID == modeID } }
+        guard lists(trialModeID), let current = display.currentModeID, current != trialModeID, lists(current) else {
+            return nil
+        }
+        return current
     }
 
     /// What undoing a trial of `modeID` puts back: the mode in use before, else the default

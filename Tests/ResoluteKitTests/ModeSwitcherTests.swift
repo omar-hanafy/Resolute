@@ -210,6 +210,28 @@ import Testing
         #expect(base.calls == [Call(modeID: 90, scope: .session)])
     }
 
+    /// A display with a failing link may come back and drop off again at once; the
+    /// placeholder mode CoreGraphics then reports must not pass for a mode chosen since.
+    @Test func keepsWaitingForADisplayThatDropsOffAgainAtOnce() throws {
+        #expect(try tryModeThatGoesAway(on: service) == .restorePending(pending))
+        service.reconnect(forSnapshots: 1)
+        #expect(try ModeSwitcher(service: service).finish(pending) == .waiting)
+        service.reconnect()
+        #expect(try ModeSwitcher(service: service).finish(pending) == .restored(to: 2))
+    }
+
+    /// A snapshot taken as the display dropped off lists only CoreGraphics' placeholder,
+    /// which says nothing about the mode the display shows.
+    @Test func doesNotTakeThePlaceholderForAModeChosenSince() throws {
+        #expect(try tryModeThatGoesAway(on: service) == .restorePending(pending))
+        service.reconnectWithPlaceholder()
+        #expect(throws: ResoluteError.revertFailed(display: "Full HD Monitor")) {
+            try ModeSwitcher(service: service).finish(pending)
+        }
+        service.reconnect(showing: 90)
+        #expect(try ModeSwitcher(service: service).finish(pending) == .restored(to: 2))
+    }
+
     /// When the display cannot say which mode it shows, it may still be the one on trial.
     @Test func putsTheModeBackWhenTheReturningDisplayCannotSayWhichModeItShows() throws {
         #expect(try tryModeThatGoesAway(on: service) == .restorePending(pending))

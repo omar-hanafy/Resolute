@@ -27,7 +27,9 @@ public struct SystemDisplayService: DisplayControlling {
         let names = DisplayNames.disambiguate(ids.map {
             screenNames[$0] ?? DisplayNames.coreDisplayName(for: $0) ?? DisplayNames.fallbackName(for: $0)
         })
-        return zip(ids, names).map { makeDisplay(id: $0, name: $1) }
+        // A display that dropped off while its part was read is left out: CoreGraphics lists a
+        // 1 × 1 placeholder mode, as the current one too, for a display that went away.
+        return zip(ids, names).map { makeDisplay(id: $0, name: $1) }.filter { Self.isOnline($0.id) }
     }
 
     public func currentModeID(of displayID: CGDirectDisplayID) -> Int32? {
