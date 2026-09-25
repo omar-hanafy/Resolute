@@ -357,3 +357,22 @@ Commit messages describe the change only (no tool attribution).
   TESTING.md asks. Reapplying the mode at login is not built: it would show the
   Keep/Revert countdown at every login.
 
+- **A revert waits for a display that dropped off.** A display that cannot show a mode may
+  lose its link during the countdown. The revert then comes back as `restorePending`
+  instead of failing, and is finished when the display returns. Only the trial is undone:
+  a display that comes back in another mode it lists is left alone. The command line
+  looks every half second for 30 seconds. The app listens for screen changes for 2
+  minutes and shows nothing while the display is away, and a mode picked for that display
+  meanwhile cancels the wait. Keep, chosen while the display is away, fails, since
+  nothing could save the mode later.
+- **SkyLight is asked only about online displays.** For an ID it never saw,
+  `CGDisplayIsOnline` answers -1 (4294967295 under Rosetta), and for a display that went
+  away CoreGraphics keeps a 1×1 placeholder mode. So only an answer that is positive as a
+  signed number counts, and it is checked right before each SkyLight call.
+- **Screen names are read on the main thread.** The app reads NSScreen directly; the
+  command line goes through `DispatchQueue.main.sync`, since its async `main` keeps the
+  main queue running.
+- **Logging.** Subsystem `com.omarhanafy.Resolute`, with two categories. `modes` covers
+  switches, trials, reverts and waits. `overrides` covers each write, removal and backup
+  deletion, or why it failed. Display names and paths are logged as public; `doctor`
+  leaves serial numbers out, because people paste its report into public bug reports.
