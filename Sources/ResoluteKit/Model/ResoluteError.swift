@@ -6,6 +6,7 @@ public enum ResoluteError: Error, Equatable, Sendable {
     case displayNotFound(String)
     case ambiguousDisplay(String, matches: [String])
     case modeNotFound(String, suggestions: [String])
+    case refreshRateNotOffered(resolution: String, rate: String, offered: [String])
     case hiddenModeNeedsConfirmation(String)
     case currentModeUnknown(display: String)
     case revertFailed(display: String)
@@ -34,6 +35,8 @@ extension ResoluteError: LocalizedError {
             suggestions.isEmpty
                 ? "No display mode matches \(query)."
                 : "No display mode matches \(query). Closest: \(suggestions.joined(separator: ", "))."
+        case .refreshRateNotOffered(let resolution, let rate, let offered):
+            "\(resolution) has no \(rate) mode. It offers \(ListFormat.and(offered))."
         case .hiddenModeNeedsConfirmation(let query):
             "\(query) is a hidden mode that macOS does not list. Pass --allow-hidden to use it."
         case .revertFailed(let display):
@@ -47,7 +50,7 @@ extension ResoluteError: LocalizedError {
         case .mirroringNeedsTwoDisplays:
             "Mirroring needs at least two displays."
         case .invalidResolution(let text):
-            "“\(text)” is not a resolution. Use WIDTHxHEIGHT, for example 1920x1080."
+            "“\(text)” is not a resolution. Use WIDTHxHEIGHT, optionally followed by one @2x or @1x and one refresh rate, for example 1920x1080@2x@60."
         case .invalidFlags(let text):
             "“\(text)” is not a flags value. Use two 32-bit hex words, for example 00000009 00a00000."
         case .invalidEntry(let message):
@@ -81,5 +84,14 @@ public enum CGErrorName {
         case 1011: "none available"
         default: "error"
         }
+    }
+}
+
+/// Joining words for messages.
+enum ListFormat {
+    /// "a", "a and b", "a, b and c"
+    static func and(_ items: [String]) -> String {
+        guard items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + " and " + items[items.count - 1]
     }
 }

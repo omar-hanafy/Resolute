@@ -47,6 +47,35 @@ import Testing
         }
     }
 
+    @Test(arguments: ["1496x967@60@50", "1496x967@2x@1x", "1496x967@2x@60hz@2x", "1920x1080@0.5"])
+    func rejectsRepeatedOrImpossibleParts(text: String) {
+        #expect(throws: ResoluteError.invalidResolution(text)) {
+            try ModeQuery(resolution: text)
+        }
+    }
+
+    @Test func listsTheRatesOnOfferWhenOneIsMissing() {
+        let offered = ["120 Hz", "60 Hz", "59.94 Hz", "50 Hz", "48 Hz", "47.95 Hz"]
+        let kept = ResoluteError.refreshRateNotOffered(resolution: "1728 × 1117 HiDPI", rate: "55 Hz", offered: offered)
+        #expect(throws: kept) { try ModeQuery(refreshRate: 55).resolve(on: display) }
+        #expect(throws: ResoluteError.refreshRateNotOffered(resolution: "1496 × 967 HiDPI", rate: "55 Hz", offered: offered)) {
+            try ModeQuery(resolution: "1496x967@55").resolve(on: display)
+        }
+        #expect(kept.errorDescription
+            == "1728 × 1117 HiDPI has no 55 Hz mode. It offers 120 Hz, 60 Hz, 59.94 Hz, 50 Hz, 48 Hz and 47.95 Hz.")
+    }
+
+    @Test func namesTheKeptSizeAndSuggestsSizesAtTheScaleAskedFor() throws {
+        do {
+            _ = try ModeQuery(scale: 1).resolve(on: display)
+            Issue.record("the panel has no 1728 × 1117 mode at 1×")
+        } catch ResoluteError.modeNotFound(let query, let suggestions) {
+            #expect(query == "1728 × 1117 @1x")
+            #expect(!suggestions.isEmpty)
+            #expect(suggestions.allSatisfy { !$0.contains("HiDPI") })
+        }
+    }
+
     @Test func describesAnyQueryWithoutTrapping() {
         #expect(ModeQuery(scale: .infinity, refreshRate: .nan).summary == "@infx")
         #expect(ModeQuery(scale: 1.5, refreshRate: 0).summary == "@1.5x")

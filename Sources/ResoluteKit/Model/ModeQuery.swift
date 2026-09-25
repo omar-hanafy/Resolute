@@ -35,7 +35,7 @@ public struct ModeQuery: Hashable, Sendable {
 
     /// Whether `hertz` could be a display's refresh rate.
     public static func isPlausible(refreshRate hertz: Double) -> Bool {
-        hertz > 0 && hertz <= 10_000
+        hertz >= 1 && hertz <= 10_000
     }
 
     /// Whether `scale` could be a display mode's scale (1 for low resolution, 2 for HiDPI).
@@ -44,7 +44,7 @@ public struct ModeQuery: Hashable, Sendable {
     }
 
     /// Parses "1920x1080", "1920×1080", "1920x1080@2x", "1920x1080@60" and
-    /// "1920x1080@2x@59.94Hz".
+    /// "1920x1080@2x@59.94Hz". A scale or rate given twice is an error, not a choice.
     public init(resolution text: String) throws {
         self.init()
         let normalized = text.lowercased()
@@ -60,9 +60,9 @@ public struct ModeQuery: Hashable, Sendable {
         self.width = width
         self.height = height
         for part in parts {
-            if part.hasSuffix("x"), let scale = Double(part.dropLast()), Self.isPlausible(scale: scale) {
+            if self.scale == nil, part.hasSuffix("x"), let scale = Double(part.dropLast()), Self.isPlausible(scale: scale) {
                 self.scale = scale
-            } else if let hertz = Double(part.hasSuffix("hz") ? String(part.dropLast(2)) : part),
+            } else if self.refreshRate == nil, let hertz = Double(part.hasSuffix("hz") ? String(part.dropLast(2)) : part),
                       Self.isPlausible(refreshRate: hertz) {
                 self.refreshRate = hertz
             } else {
@@ -101,20 +101,54 @@ public struct ModeQuery: Hashable, Sendable {
             throw ResoluteError.currentModeUnknown(display: display.name)
         }
         let matches = matchingModes(on: display, includeHidden: allowHidden)
-        guard !matches.isEmpty else {
-            if !allowHidden, !matchingModes(on: display, includeHidden: true).isEmpty {
-                throw ResoluteError.hiddenModeNeedsConfirmation(summary)
-            }
-            throw ResoluteError.modeNotFound(summary, suggestions: suggestions(on: display))
-        }
-        let current = display.currentMode
-        let groups = ModeCatalog.groups(matches)
-        // Prefer the scale the display uses now, then HiDPI.
+        guard !matches.isEmpty else { throw noMatch(on: display) }
+        let group = Self.preferredGroup(ModeCatalog.groups(matches), current: display.currentMode)
+        return ModeCatalog.preferredMode(in: group, current: display.currentMode)
+    }
+
+    /// The group at the scale the display uses now, else a HiDPI one, else the first.
+    static func preferredGroup(_ groups: [ResolutionGroup], current: DisplayMode?) -> ResolutionGroup {
         let sameScale = groups.first { group in
             current.map { abs(group.modes[0].scale - $0.scale) < 0.01 } ?? false
         }
-        let group = sameScale ?? groups.first(where: \.isHiDPI) ?? groups[0]
-        return ModeCatalog.preferredMode(in: group, current: current)
+        return sameScale ?? groups.first(where: \.isHiDPI) ?? groups[0]
+    }
+
+    /// Why nothing matches, in the most useful terms.
+    private func noMatch(on display: Display) -> ResoluteError {
+        let described = withKeptSize(on: display).summary
+        if !allowHidden, !matchingModes(on: display, includeHidden: true).isEmpty {
+            return .hiddenModeNeedsConfirmation(described)
+        }
+        if let refreshRate {
+            // The resolution exists but not at this rate: say which rates it has.
+            var anyRate = self
+            anyRate.refreshRate = nil
+            let sameSize = anyRate.matchingModes(on: display, includeHidden: allowHidden)
+            if !sameSize.isEmpty {
+                let group = Self.preferredGroup(ModeCatalog.groups(sameSize), current: display.currentMode)
+                let offered = group.refreshRates.filter { $0 > 0 }.map(RefreshRate.format)
+                if !offered.isEmpty {
+                    return .refreshRateNotOffered(
+                        resolution: group.sizeText + (group.isHiDPI ? " HiDPI" : ""),
+                        rate: RefreshRate.format(refreshRate),
+                        offered: offered
+                    )
+                }
+            }
+        }
+        return .modeNotFound(described, suggestions: suggestions(on: display))
+    }
+
+    /// This query with the size it keeps filled in: `--scale 1` keeps 1728 × 1117.
+    private func withKeptSize(on display: Display) -> ModeQuery {
+        guard width == nil, height == nil, !useDefault, modeID == nil, let current = display.currentMode else {
+            return self
+        }
+        var query = self
+        query.width = current.width
+        query.height = current.height
+        return query
     }
 
     func matchingModes(on display: Display, includeHidden: Bool) -> [DisplayMode] {
@@ -134,14 +168,17 @@ public struct ModeQuery: Hashable, Sendable {
         }
     }
 
-    /// The three system resolutions closest in area to the one asked for.
+    /// The three system resolutions closest in area to the one asked for or kept, at the
+    /// scale asked for when there is one.
     func suggestions(on display: Display) -> [String] {
-        guard let width, let height else { return [] }
+        let query = withKeptSize(on: display)
+        guard let width = query.width, let height = query.height else { return [] }
         let target = width * height
         func distance(_ group: ResolutionGroup) -> Int {
             abs(group.key.width * group.key.height - target)
         }
         return ModeCatalog.groups(display.modes.filter { $0.origin == .system })
+            .filter { group in scale.map { abs(group.modes[0].scale - $0) < 0.01 } ?? true }
             .sorted { lhs, rhs in
                 (distance(lhs), lhs.isHiDPI ? 0 : 1, -lhs.key.width) < (distance(rhs), rhs.isHiDPI ? 0 : 1, -rhs.key.width)
             }
