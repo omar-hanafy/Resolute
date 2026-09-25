@@ -83,12 +83,16 @@ public struct OverrideInstaller: Sendable {
 
     /// Copies the file about to change to "<stem>.plist", or "<stem>-2.plist" and so on.
     /// Each name is claimed with an exclusive create (`set -C`), so installs that overlap
-    /// never overwrite each other's backups.
+    /// never overwrite each other's backups. A name that cannot be claimed for any other
+    /// reason stops the script with that reason, and a failed copy leaves no empty backup.
     private static func backupCommand(file: String, stem: URL) -> String {
-        let folder = Shell.quote(stem.deletingLastPathComponent().path(percentEncoded: false))
+        let folderPath = stem.deletingLastPathComponent().path(percentEncoded: false)
         let base = Shell.quote(stem.path(percentEncoded: false))
-        return "if [ -f \(file) ]; then mkdir -p \(folder); n=1; backup=\(base).plist; "
-            + "while ! (set -C; : > \"$backup\") 2>/dev/null; do n=$((n + 1)); [ \"$n\" -le 1000 ]; backup=\(base)-$n.plist; done; "
-            + "cp -p \(file) \"$backup\"; fi"
+        let noBackup = Shell.quote("Could not create a backup in \(folderPath)")
+        let noCopy = Shell.quote("Could not back up the file being replaced.")
+        return "if [ -f \(file) ]; then mkdir -p \(Shell.quote(folderPath)); n=1; backup=\(base).plist; "
+            + "until (set -C; : > \"$backup\") 2>/dev/null; do "
+            + "[ -e \"$backup\" ] || { echo \(noBackup) >&2; exit 1; }; n=$((n + 1)); backup=\(base)-$n.plist; done; "
+            + "cp -p \(file) \"$backup\" || { rm -f \"$backup\"; echo \(noCopy) >&2; exit 1; }; fi"
     }
 }

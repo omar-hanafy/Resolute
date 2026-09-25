@@ -117,6 +117,41 @@ import Testing
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false)).count == 5)
     }
 
+    @Test(.enabled(if: geteuid() != 0, "root can write anywhere"))
+    func saysWhyNoBackupCouldBeMade() async throws {
+        let root = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.appending(path: "Backups/DisplayVendorID-db4").path(percentEncoded: false))
+            try? FileManager.default.removeItem(at: root)
+        }
+        let installer = installer(at: root)
+        try await installer.install(DisplayOverride(key: key, resolutions: [.standard(width: 1920, height: 1080)]))
+        let folder = installer.locations.backupRoot.appending(path: key.vendorDirectoryName)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path(percentEncoded: false))
+        do {
+            try await installer.install(DisplayOverride(key: key, resolutions: [.standard(width: 2560, height: 1440)]))
+            Issue.record("expected the install to stop without a backup")
+        } catch ResoluteError.commandFailed(_, let message) {
+            #expect(message.contains("Could not create a backup in \(folder.path(percentEncoded: false))"))
+        }
+        // Nothing changed without a backup.
+        let stored = try OverrideStore(locations: installer.locations).installedOverride(for: key)
+        #expect(stored?.resolutions == [.standard(width: 1920, height: 1080)])
+    }
+
+    @Test(.enabled(if: geteuid() != 0, "root can read any file"))
+    func leavesNoEmptyBackupWhenTheCopyFails() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = installer(at: root)
+        let url = try await installer.install(DisplayOverride(key: key, resolutions: [.standard(width: 1920, height: 1080)]))
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path(percentEncoded: false))
+        await #expect(throws: ResoluteError.self) { try await installer.remove(key) }
+        let folder = installer.locations.backupRoot.appending(path: key.vendorDirectoryName).path(percentEncoded: false)
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []).isEmpty)
+    }
+
     @Test func removesTheOverrideAndItsEmptyFolder() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -157,9 +192,11 @@ import Testing
         #expect(script == "set -e; umask 022; "
             + "if [ -f '/L/DisplayVendorID-1/DisplayProductID-2' ]; then mkdir -p '/B/DisplayVendorID-1/'; "
             + "n=1; backup='/B/DisplayVendorID-1/DisplayProductID-2-x'.plist; "
-            + "while ! (set -C; : > \"$backup\") 2>/dev/null; do n=$((n + 1)); [ \"$n\" -le 1000 ]; "
-            + "backup='/B/DisplayVendorID-1/DisplayProductID-2-x'-$n.plist; done; "
-            + "cp -p '/L/DisplayVendorID-1/DisplayProductID-2' \"$backup\"; fi; "
+            + "until (set -C; : > \"$backup\") 2>/dev/null; do "
+            + "[ -e \"$backup\" ] || { echo 'Could not create a backup in /B/DisplayVendorID-1/' >&2; exit 1; }; "
+            + "n=$((n + 1)); backup='/B/DisplayVendorID-1/DisplayProductID-2-x'-$n.plist; done; "
+            + "cp -p '/L/DisplayVendorID-1/DisplayProductID-2' \"$backup\" "
+            + "|| { rm -f \"$backup\"; echo 'Could not back up the file being replaced.' >&2; exit 1; }; fi; "
             + "mkdir -p '/L/DisplayVendorID-1/'; "
             + "incoming=$(mktemp '/L/DisplayVendorID-1/.resolute.XXXXXX'); "
             + "trap 'rm -f \"$incoming\"' EXIT; "
