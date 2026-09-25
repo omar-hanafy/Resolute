@@ -71,6 +71,8 @@ With `--json`, every key is always present, with `null` when there is no value; 
 
 macOS reads per-display override files from `/Library/Displays/Contents/Resources/Overrides`. The **Custom Resolutions…** window, and `resolute overrides`, edit the `scale-resolutions` list in those files, so you can add modes a display does not offer, such as 2560 × 1080 HiDPI on a 5120 × 2160 monitor.
 
+<img src="docs/images/custom-resolutions.png" width="860" alt="The Custom Resolutions window: the connected built-in display and an installed override for a 5120 × 2160 monitor, listing 5120 × 2160 1× and 2560 × 1080 HiDPI, with Add Resolution, Remove Override… and Show in Finder">
+
 - The list shows every entry in the file, in the file's order. Adding a HiDPI resolution also adds a 1× entry at its rendered size, as RDM did, unless the list has one; removing the HiDPI entry removes that 1× entry only if it was added with it in the same edit. Removing a 1× entry that a HiDPI entry renders at gets a note, with a way to put it back.
 - Saving asks for an administrator password. The file being replaced is first copied to `/Library/Application Support/Resolute/Backups`. **Restore Backup…** (or `sudo resolute overrides restore`) puts one back, and `sudo resolute overrides prune` deletes old ones.
 - If the file changed after you opened it, for example through `resolute overrides`, Resolute reads it again or, when you have unsaved changes, asks before saving over it.
@@ -111,7 +113,7 @@ make icon        # regenerates Resources/AppIcon.icns
 
 CI (`.github/workflows/ci.yml`) lints and runs the tests on every push and pull request, but only while the repo is public; while it's private, a run only happens when a maintainer starts one by hand.
 
-`Resolute.app/Contents/MacOS/Resolute --dump-menu` prints the menu as it would appear, and `--render-editor file.png` captures the Custom Resolutions window without showing it (the terminal needs the Screen Recording permission).
+`Resolute.app/Contents/MacOS/Resolute --dump-menu` prints the menu as it would appear, and `--render-editor file.png` captures the Custom Resolutions window without showing it (the terminal needs the Screen Recording permission); `docs/images/custom-resolutions.png` is one such capture.
 
 ## Credits
 
