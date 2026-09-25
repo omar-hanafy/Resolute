@@ -8,7 +8,7 @@ Resolute is a ground-up successor to [RDM](https://github.com/avibrazil/RDM). On
 
 - **Every mode in one menu.** HiDPI ("looks like") resolutions, low-resolution 1× modes such as your panel's full native resolution, and, while you hold ⌥, modes macOS lists nowhere.
 - **Refresh rates.** Switch between 120, 60, 59.94, 50, 48 and 47.95 Hz, or whatever your display offers, without changing the resolution.
-- **Safe hidden modes.** A hidden mode is tried for the current session and reverts after 15 seconds unless you choose Keep, so a mode your display cannot show undoes itself.
+- **Safe hidden modes.** A hidden mode is tried for the current session and reverts after 15 seconds unless you choose Keep (in the menu) or type `y` (in the terminal), so a mode your display cannot show undoes itself.
 - **Mirroring** on or off with one click.
 - **Custom HiDPI resolutions** through display override files, like RDM's editor, with automatic backups.
 - **A command-line tool,** `resolute`, for scripts and shortcuts, with JSON output.
@@ -17,7 +17,7 @@ Resolute is a ground-up successor to [RDM](https://github.com/avibrazil/RDM). On
 ## Requirements
 
 - macOS 14 Sonoma or later. Developed and tested on macOS 27 on Apple silicon.
-- To build: Xcode 16 or later (Swift 6).
+- To build: Xcode with Swift 6. Developed and tested with Xcode 27 (Swift 6.4); older toolchains are untested.
 
 ## Install
 
@@ -40,7 +40,7 @@ Click the display icon in the menu bar. Each display shows its current resolutio
 - **HiDPI** resolutions look sharp: macOS draws them at twice the size and scales the result to your panel.
 - **Low Resolution (1×)** modes draw one pixel per point. On a Retina display this is how you get the panel's full native resolution (3456 × 2234 on a 16-inch MacBook Pro), at the cost of very small text. Turn the section off with **Show Low-Resolution Modes**.
 - **Default** marks macOS's default mode and **Native** the panel's native size.
-- Hold **⌥** while opening the menu to see hidden modes, mode IDs and pixel sizes.
+- Hold **⌥** while opening the menu to see hidden modes, mode IDs and pixel sizes. macOS may keep a hidden mode only until you log out, even after you choose Keep.
 
 ## The command line
 
@@ -55,6 +55,7 @@ $ resolute set 3456x2234@1x       # the native resolution at 1×
 $ resolute set --refresh 60       # keeps the resolution
 $ resolute set --default
 $ resolute set 1920x1080 -d DELL --session   # another display, until you log out
+$ resolute set --mode-id <id> --allow-hidden  # a hidden mode from `resolute modes --all --raw`: kept only if you type y
 $ resolute mirror toggle
 $ resolute displays --json
 ```
