@@ -28,5 +28,9 @@ let package = Package(
             resources: [.copy("Fixtures")]
         ),
         .testTarget(name: "ResoluteAppTests", dependencies: ["ResoluteApp", "ResoluteKit"]),
+        .testTarget(
+            name: "ResoluteCLITests",
+            dependencies: ["resolute", "ResoluteKit", .product(name: "ArgumentParser", package: "swift-argument-parser")]
+        ),
     ]
 )
