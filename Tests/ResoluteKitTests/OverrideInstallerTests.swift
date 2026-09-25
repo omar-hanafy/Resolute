@@ -244,6 +244,25 @@ actor EventLog {
         #expect(await log.events == ["first in", "first out", "second in", "second out"])
     }
 
+    /// Backups go beside the lock, and the app lists them as the user, so the folder the
+    /// lock makes is readable by everyone whatever umask sudo passes on. The umask is the
+    /// process's, so it is strict only while the lock is taken.
+    @Test func makesItsFolderReadableUnderAStrictUmask() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appending(path: "Resolute", directoryHint: .isDirectory)
+        let previous = umask(0o077)
+        do {
+            try await OverrideLock(file: folder.appending(path: "overrides.lock")).withLock {}
+            umask(previous)
+        } catch {
+            umask(previous)
+            throw error
+        }
+        let attributes = try FileManager.default.attributesOfItem(atPath: folder.path(percentEncoded: false))
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o755)
+    }
+
     @Test(.enabled(if: geteuid() != 0, "root can open any file"))
     func refusesToEditWithoutTheLock() async throws {
         let root = try makeTemporaryDirectory()

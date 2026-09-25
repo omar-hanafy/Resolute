@@ -24,7 +24,10 @@ public struct OverrideLock: Sendable {
 
     /// Opens and locks the file, polling so no thread is held while another edit runs.
     private func acquire(onWait: () -> Void) async throws -> Int32 {
-        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // The app lists the backups beside the lock as the user, whatever umask sudo passed on.
+        try? FileManager.default.createDirectory(
+            at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755]
+        )
         let path = file.path(percentEncoded: false)
         let descriptor = open(path, O_RDONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o644)
         guard descriptor >= 0 else {
