@@ -290,6 +290,27 @@ struct GatedRunner: CommandRunning {
         #expect(model.notice == nil)
     }
 
+    /// A folder in the file's place is shown, never deleted with administrator rights.
+    @Test func offersOnlyTheFinderForAFolderInTheFilesPlace() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = OverrideLocations.staged(at: root).userFile(for: OverrideKey(display: first))
+        try stageUnreadable(.folder, at: file)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        #expect(model.source == .installed)
+        #expect(!model.canRemoveOverride)
+        await model.removeOverride()
+        #expect(model.notice == nil)
+        #expect(FileManager.default.fileExists(atPath: file.path(percentEncoded: false)))
+
+        try FileManager.default.removeItem(at: file)
+        try stageUnreadable(.notAPropertyList, at: file)
+        model.reloadTargets()
+        model.select(OverrideKey(display: second))
+        model.select(OverrideKey(display: first))
+        #expect(model.canRemoveOverride)
+    }
+
     @Test func removingAnUnreadableOverrideLoadsTheDisplay() async throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

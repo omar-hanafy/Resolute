@@ -119,12 +119,14 @@ private struct InstalledOverrideActions: View {
     @State private var isConfirmingRemoval = false
 
     var body: some View {
-        Button("Remove Override…", role: .destructive) { isConfirmingRemoval = true }
-            .confirmationDialog("Remove the custom override for this display?", isPresented: $isConfirmingRemoval) {
-                Button("Remove Override", role: .destructive) { Task { await model.removeOverride() } }
-            } message: {
-                Text("macOS goes back to the display's default resolutions after you reconnect it or restart. A backup is kept.")
-            }
+        if model.canRemoveOverride {
+            Button("Remove Override…", role: .destructive) { isConfirmingRemoval = true }
+                .confirmationDialog("Remove the custom override for this display?", isPresented: $isConfirmingRemoval) {
+                    Button("Remove Override", role: .destructive) { Task { await model.removeOverride() } }
+                } message: {
+                    Text("macOS goes back to the display's default resolutions after you reconnect it or restart. A backup is kept.")
+                }
+        }
         Button("Show in Finder") { model.revealInFinder() }
     }
 }

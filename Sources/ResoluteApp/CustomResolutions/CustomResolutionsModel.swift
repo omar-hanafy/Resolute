@@ -91,6 +91,15 @@ final class CustomResolutionsModel {
 
     var canSave: Bool { hasChanges && !isWorking }
 
+    /// Whether Remove Override… is offered: only for a file under the user root. A folder
+    /// in the file's place is shown, never deleted with administrator rights.
+    var canRemoveOverride: Bool {
+        guard let selection, source == .installed else { return false }
+        var isFolder: ObjCBool = false
+        let path = store.locations.userFile(for: selection).path(percentEncoded: false)
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) && !isFolder.boolValue
+    }
+
     /// Whether Remove and Delete are available.
     var canRemoveSelection: Bool { !selectedEntries.isEmpty && !isWorking }
 
@@ -252,7 +261,7 @@ final class CustomResolutionsModel {
     }
 
     func removeOverride() async {
-        guard !isWorking, let selection, source == .installed else { return }
+        guard !isWorking, let selection, canRemoveOverride else { return }
         isWorking = true
         defer { isWorking = false }
         do {
