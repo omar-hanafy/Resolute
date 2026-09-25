@@ -50,6 +50,31 @@ struct GatedRunner: CommandRunning {
     }
 }
 
+/// Runs scripts with /bin/sh and counts them, so a test can tell that no password would
+/// have been asked for. `beforeFirstRun` stands for another tool's edit that lands after
+/// the model's check but before its script.
+final class CountingRunner: CommandRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var beforeFirstRun: (@Sendable () throws -> Void)?
+
+    init(beforeFirstRun: (@Sendable () throws -> Void)? = nil) {
+        self.beforeFirstRun = beforeFirstRun
+    }
+
+    var runs: Int { lock.withLock { count } }
+
+    func run(_ script: String) async throws {
+        let interference = lock.withLock {
+            count += 1
+            defer { beforeFirstRun = nil }
+            return beforeFirstRun
+        }
+        try interference?()
+        try await ShellCommandRunner().run(script)
+    }
+}
+
 @MainActor
 @Suite struct CustomResolutionsModelTests {
     let first = Display(id: 5, name: "First", vendorID: 0x10AC, productID: 0x1111, currentModeID: nil, modes: [])
@@ -262,6 +287,213 @@ struct GatedRunner: CommandRunning {
         #expect(model.selectedEntries.isEmpty)
     }
 
+    // MARK: - Changed on disk
+
+    func installed(_ key: OverrideKey, under root: URL) throws -> DisplayOverride? {
+        try OverrideStore(locations: .staged(at: root)).installedOverride(for: key)
+    }
+
+    /// What another app, or `resolute`, writes while the editor has the file open.
+    var theirs: DisplayOverride {
+        DisplayOverride(key: OverrideKey(display: first), resolutions: [.standard(width: 1280, height: 800)])
+    }
+
+    /// Opens `first`'s override (`hd` alone), adds `qhd`, then lets another tool replace the file.
+    func editWhileAnotherToolWrites(root: URL, runner: CountingRunner) throws -> CustomResolutionsModel {
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        #expect(model.add(qhd) == nil)
+        try install(theirs, under: root)
+        return model
+    }
+
+    /// No password is asked for a save based on an old file, and the edits stay.
+    @Test func asksBeforeSavingOverAFileThatChanged() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = try editWhileAnotherToolWrites(root: root, runner: runner)
+
+        await model.save()
+        #expect(runner.runs == 0)
+        let conflict = try #require(model.conflict)
+        #expect(conflict.change == .save)
+        #expect(conflict.title == "The override for First changed after it was opened")
+        #expect(conflict.message.contains("another app or the resolute command"))
+        #expect(conflict.message.contains("Your changes are still here"))
+        #expect(conflict.proceedTitle == "Save Anyway")
+        #expect(conflict.discardTitle == "Discard My Changes")
+        #expect(model.hasChanges)
+        #expect(model.notice == nil)
+        #expect(try installed(OverrideKey(display: first), under: root) == theirs.readBack())
+    }
+
+    @Test func saveAnywayReplacesTheNewVersionAndBacksItUp() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = try editWhileAnotherToolWrites(root: root, runner: runner)
+        let ours = try #require(model.draft?.working)
+        await model.save()
+
+        await model.proceed(with: try #require(model.conflict))
+        #expect(runner.runs == 1)
+        #expect(model.conflict == nil)
+        #expect(!model.hasChanges)
+        #expect(model.notice?.title == "Custom resolutions saved")
+        let key = OverrideKey(display: first)
+        #expect(try installed(key, under: root)?.resolutions == ours.resolutions)
+        let store = OverrideStore(locations: .staged(at: root))
+        let backup = try #require(store.backups(for: key).first)
+        #expect(try store.contents(of: backup).override == theirs.readBack())
+    }
+
+    @Test func discardingMyChangesOpensTheNewVersion() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = try editWhileAnotherToolWrites(root: root, runner: runner)
+        await model.save()
+
+        model.reloadFromDisk()
+        #expect(model.conflict == nil)
+        #expect(!model.hasChanges)
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+        #expect(runner.runs == 0)
+        // What was read is now the file on disk, so a save goes ahead.
+        _ = model.add(hd)
+        await model.save()
+        #expect(model.conflict == nil)
+        #expect(runner.runs == 1)
+    }
+
+    @Test func cancellingKeepsTheEditsAndTheFile() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = try editWhileAnotherToolWrites(root: root, runner: runner)
+        await model.save()
+
+        model.cancelConflict()
+        #expect(model.conflict == nil)
+        #expect(model.hasChanges)
+        #expect(try installed(OverrideKey(display: first), under: root) == theirs.readBack())
+        // The file is still not the one the edits started from.
+        await model.save()
+        #expect(model.conflict?.change == .save)
+        #expect(runner.runs == 0)
+    }
+
+    /// Another tool wrote after the check but before the script: the script refuses to
+    /// replace it, and the person is asked as if the check had caught it.
+    @Test func asksWhenTheFileChangesDuringTheSave() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        let file = OverrideLocations.staged(at: root).userFile(for: key)
+        let data = try theirs.propertyListData()
+        let runner = CountingRunner { try data.write(to: file) }
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        _ = model.add(qhd)
+        let ours = try #require(model.draft?.working)
+
+        await model.save()
+        #expect(runner.runs == 1)
+        #expect(model.conflict?.change == .save)
+        #expect(model.conflict?.current == .contents(data))
+        #expect(model.notice == nil)
+        #expect(model.hasChanges)
+        #expect(try installed(key, under: root) == theirs.readBack())
+
+        await model.proceed(with: try #require(model.conflict))
+        #expect(try installed(key, under: root)?.resolutions == ours.resolutions)
+        #expect(!model.hasChanges)
+    }
+
+    /// The file a save writes is what the next save expects, so saving twice never asks.
+    @Test func savesAgainWithoutAsking() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        _ = model.add(hd)
+        await model.save()
+        _ = model.add(qhd)
+        await model.save()
+        #expect(model.conflict == nil)
+        #expect(runner.runs == 2)
+        #expect(!model.hasChanges)
+    }
+
+    @Test func asksBeforeRemovingAFileThatChanged() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        try install(theirs, under: root)
+
+        await model.removeOverride()
+        #expect(runner.runs == 0)
+        let conflict = try #require(model.conflict)
+        #expect(conflict.change == .remove)
+        #expect(conflict.proceedTitle == "Remove Anyway")
+        #expect(conflict.discardTitle == "Reload")
+        #expect(try installed(key, under: root) == theirs.readBack())
+
+        await model.proceed(with: conflict)
+        #expect(runner.runs == 1)
+        #expect(try installed(key, under: root) == nil)
+        #expect(model.source == .missing)
+        #expect(model.notice?.title == "Override removed")
+    }
+
+    /// Nothing is left to remove, so the only ways on are reading it again and Cancel.
+    @Test func offersNoRemovalOfAFileAnotherToolRemoved() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        try FileManager.default.removeItem(at: OverrideLocations.staged(at: root).userFile(for: key))
+
+        await model.removeOverride()
+        let conflict = try #require(model.conflict)
+        #expect(conflict.current == .absent)
+        #expect(conflict.proceedTitle == nil)
+        await model.proceed(with: conflict)
+        #expect(runner.runs == 0)
+    }
+
+    /// The script waits for the command line's lock, and a command that keeps it gets a
+    /// notice that says so rather than a failed script's status.
+    @Test func saysWhenAnotherCommandKeepsOverridesBusy() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let locations = OverrideLocations.staged(at: root)
+        var installer = OverrideInstaller(locations: locations, runner: ShellCommandRunner(), scriptLock: locations.lockFile)
+        installer.scriptLockTimeout = 1
+        let model = CustomResolutionsModel(
+            service: StubDisplays([first, second]), store: OverrideStore(locations: locations), installer: installer
+        )
+        _ = model.add(hd)
+        // Another command holds the lock, as `OverrideLock` does, for the whole wait.
+        let descriptor = open(locations.lockFile.path(percentEncoded: false), O_RDONLY | O_CREAT, 0o644)
+        try #require(descriptor >= 0)
+        defer { close(descriptor) }
+        try #require(flock(descriptor, LOCK_EX) == 0)
+
+        await model.save()
+        #expect(model.notice?.title == "Another Resolute command is editing overrides")
+        #expect(model.notice?.detail.contains("Your changes are still here") == true)
+        #expect(model.conflict == nil)
+        #expect(model.hasChanges)
+        #expect(try installed(OverrideKey(display: first), under: root) == nil)
+    }
+
     // MARK: - Unreadable overrides
 
     enum Breakage: CaseIterable, Sendable {
@@ -359,6 +591,13 @@ struct GatedRunner: CommandRunning {
         await model.removeOverride()
         #expect(model.notice == nil)
         #expect(FileManager.default.fileExists(atPath: locations.systemFile(for: secondKey).path(percentEncoded: false)))
+    }
+}
+
+extension DisplayOverride {
+    /// This override as reading its file back gives it.
+    func readBack() throws -> DisplayOverride {
+        try DisplayOverride(key: key, propertyList: propertyListData())
     }
 }
 

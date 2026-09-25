@@ -26,6 +26,21 @@ struct CustomResolutionsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .alert(
+                model.conflict?.title ?? "",
+                isPresented: Binding(get: { model.conflict != nil }, set: { if !$0 { model.cancelConflict() } }),
+                presenting: model.conflict
+            ) { conflict in
+                // Each button acts on the conflict it was shown for: dismissing the alert
+                // may clear `model.conflict` before the action runs.
+                if let proceed = conflict.proceedTitle {
+                    Button(proceed, role: .destructive) { Task { await model.proceed(with: conflict) } }
+                }
+                Button(conflict.discardTitle) { model.reloadFromDisk() }
+                Button("Cancel", role: .cancel) {}
+            } message: { conflict in
+                Text(conflict.message)
+            }
         }
         .frame(minWidth: 780, minHeight: 500)
         // Nothing may change while a save waits for the administrator password.
