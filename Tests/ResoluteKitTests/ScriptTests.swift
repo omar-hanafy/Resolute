@@ -170,6 +170,35 @@ import Testing
         #expect(sent.contains("ignoring application responses"))
     }
 
+    /// `make release` publishes one version's changelog section, not the whole file.
+    @Test func takesTheReleaseNotesForOneVersion() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "Resolute notes \(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let changelog = folder.appending(path: "CHANGELOG.md")
+        try Data("""
+            # Changelog
+
+            ## 0.3.0 — 2026-09-25
+
+            ### Added
+
+            - Backups.
+
+            ## 0.2.0 — 2026-09-24
+
+            - Fixes.
+
+            """.utf8).write(to: changelog)
+        let notes = { (version: String) throws -> String in
+            let script = "source \(Self.shellQuote(Self.libPath)); release_notes \(version) \(Self.shellQuote(changelog.path))"
+            return try Self.run("/bin/bash", ["-c", script]).output
+        }
+        #expect(try notes("0.3.0") == "### Added\n\n- Backups.\n")
+        #expect(try notes("0.2.0") == "- Fixes.\n")
+        #expect(try notes("0.1.0").isEmpty)
+    }
+
     @Test func quitAndWaitSucceedsAtOnceWhenNothingIsRunning() throws {
         let stub = """
         osascript() {

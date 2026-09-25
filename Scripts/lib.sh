@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Shared functions for install.sh and uninstall.sh. Callers set BUNDLE_ID and source
-# this file before calling quit_and_wait.
+# Shared functions for install.sh, uninstall.sh and release.sh. Callers set BUNDLE_ID and
+# source this file before calling quit_and_wait.
 
 # How long to wait for the app to quit, and how often to check, in seconds; and how long
 # the app gets to turn Launch at Login off. Overridable so tests don't wait them out.
@@ -72,3 +72,21 @@ quit_and_wait() {
   done
   return 0
 }
+
+# Prints the CHANGELOG section for version $1 from file $2, without its heading or the
+# blank lines around it. Prints nothing when the file has no such section.
+release_notes() {
+  awk -v heading="## $1" '
+    $0 == heading || index($0, heading " ") == 1 { found = 1; next }
+    found && /^## / { exit }
+    found { lines[++count] = $0 }
+    END {
+      first = 1
+      while (first <= count && lines[first] == "") first++
+      last = count
+      while (last >= first && lines[last] == "") last--
+      for (i = first; i <= last; i++) print lines[i]
+    }
+  ' "$2"
+}
+

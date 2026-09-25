@@ -29,7 +29,7 @@ make install
 
 `make install` builds `dist/Resolute.app` (universal, signed ad hoc), copies it to `/Applications`, links the `resolute` command into `/usr/local/bin` when that folder is writable, and opens the app. `make app` only builds; the results are in `dist/`.
 
-`make release` builds the universal app and packages `dist/Resolute-<version>.zip`, `dist/Resolute-<version>.dmg` and `dist/SHA256SUMS`. `SIGN_IDENTITY` sets the codesigning identity for `make app` and `make release` (default `-`, ad hoc; a real identity also turns on the hardened runtime). `NOTARY_PROFILE` names a keychain profile created with `xcrun notarytool store-credentials`; with it set, `make release` notarizes and staples the zip and dmg, which needs a Developer ID Application `SIGN_IDENTITY`. Without `NOTARY_PROFILE` the build is signed but not notarized, so Gatekeeper blocks a downloaded copy until you right-click it and choose Open.
+`make release` builds the universal app and packages `dist/Resolute-<version>.zip`, `dist/Resolute-<version>.dmg` and `dist/SHA256SUMS`. `SIGN_IDENTITY` sets the codesigning identity for `make app` and `make release` (default `-`, ad hoc; a real identity also turns on the hardened runtime). `NOTARY_PROFILE` names a keychain profile created with `xcrun notarytool store-credentials`; with it set, `make release` notarizes and staples the zip and dmg, which needs a Developer ID Application `SIGN_IDENTITY`. Without `NOTARY_PROFILE` the build is signed but not notarized, so macOS blocks a downloaded copy until you allow it in System Settings › Privacy & Security (Open Anyway).
 
 If you used RDM, quit it and remove it from System Settings › General › Login Items. Resolute reads the override files RDM wrote.
 

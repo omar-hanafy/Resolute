@@ -8,6 +8,8 @@
 # and stapled; this requires SIGN_IDENTITY to be a Developer ID Application identity.
 # Without NOTARY_PROFILE the build is signed but not notarized.
 set -euo pipefail
+# shellcheck source=Scripts/lib.sh
+source "$(dirname "$0")/lib.sh"
 cd "$(dirname "$0")/.."
 
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
@@ -67,6 +69,11 @@ fi
 
 (cd dist && shasum -a 256 "$ZIP_NAME" "$DMG_NAME" > SHA256SUMS)
 
-echo "Built $ZIP, $DMG and dist/SHA256SUMS"
+# This version's section of the changelog, as the release notes.
+NOTES="dist/RELEASE-NOTES.md"
+release_notes "$VERSION" CHANGELOG.md > "$NOTES"
+[[ -s "$NOTES" ]] || echo "CHANGELOG.md has no section for $VERSION; $NOTES is empty." >&2
+
+echo "Built $ZIP, $DMG, dist/SHA256SUMS and $NOTES"
 echo "Release command:"
-echo "  gh release create v$VERSION $ZIP $DMG dist/SHA256SUMS --title \"Resolute $VERSION\" --notes-file CHANGELOG.md"
+echo "  gh release create v$VERSION $ZIP $DMG dist/SHA256SUMS --title \"Resolute $VERSION\" --notes-file $NOTES"
