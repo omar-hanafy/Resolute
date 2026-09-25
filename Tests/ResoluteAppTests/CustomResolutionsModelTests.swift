@@ -994,6 +994,52 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
     }
 }
 
+/// What VoiceOver reads in the editor.
+@MainActor
+@Suite struct EditorAccessibilityTests {
+    typealias Row = CustomResolutionsModel.Row
+    typealias Target = CustomResolutionsModel.Target
+
+    /// Apple's 12-byte form of 1728 × 1117 HiDPI: pixel width, pixel height, flags.
+    nonisolated static let appleEntry = PreservedEntry.data(Data([0, 0, 0x0D, 0x80, 0, 0, 0x08, 0xBA, 0, 0, 0, 1]))
+
+    @Test func readsAHiDPIRowInOneGo() {
+        let row = Row(entry: .hiDPI(width: 1280, height: 800, flags: .standard))
+        #expect(row.accessibilityLabel == "1280 by 800, HiDPI, rendered at 2560 by 1600, aspect ratio 16:10")
+    }
+
+    @Test func readsA1xRowWithoutItsPixelsAgain() {
+        let row = Row(entry: .standard(width: 2560, height: 1600))
+        #expect(row.accessibilityLabel == "2560 by 1600, 1x, aspect ratio 16:10")
+    }
+
+    @Test func readsAKeptEntryAsTheModeItNames() {
+        #expect(Row(entry: .preserved(Self.appleEntry)).accessibilityLabel
+            == "1728 by 1117, HiDPI, rendered at 3456 by 2234, aspect ratio 1.55:1")
+        #expect(Row(entry: .preserved(.data(Data([1, 2, 3])))).accessibilityLabel == "3-byte entry, kept as is")
+    }
+
+    /// VoiceOver reads "×" as "multiplied by".
+    @Test(arguments: [
+        ScaleResolution.hiDPI(width: 1920, height: 1080, flags: .standard), .standard(width: 3840, height: 2160),
+        .preserved(appleEntry), .preserved(.data(Data([0, 0, 0x0D, 0x80, 0, 0, 0x08, 0xBA]))),
+    ])
+    func neverSaysTimes(_ entry: ScaleResolution) {
+        #expect(!Row(entry: entry).accessibilityLabel.isEmpty)
+        #expect(!Row(entry: entry).accessibilityLabel.contains("×"))
+    }
+
+    @Test func saysWhetherADisplayIsConnectedAndHasAnOverride() {
+        let key = OverrideKey(vendorID: 0x10AC, productID: 0x1111)
+        #expect(Target(key: key, name: "Studio", isConnected: true, hasOverride: true).accessibilityLabel
+            == "Studio, connected, has a custom override")
+        #expect(Target(key: key, name: "Studio", isConnected: true, hasOverride: false).accessibilityLabel
+            == "Studio, connected, no custom override")
+        #expect(Target(key: key, name: "Old Monitor", isConnected: false, hasOverride: true).accessibilityLabel
+            == "Old Monitor, not connected, has a custom override")
+    }
+}
+
 extension DisplayOverride {
     /// This override as reading its file back gives it.
     func readBack() throws -> DisplayOverride {

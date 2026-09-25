@@ -106,6 +106,8 @@ private struct TargetRow: View {
             Image(systemName: "display")
                 .foregroundStyle(target.isConnected ? .primary : .secondary)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(target.accessibilityLabel)
     }
 }
 
@@ -214,15 +216,21 @@ private struct OverrideEditor: View {
                     .textFieldStyle(.roundedBorder)
             }
 
+            // VoiceOver reads each row once, from its first cell: the whole row, with sizes
+            // it would otherwise read as multiplications.
             Table(model.rows, selection: $model.selectedEntries) {
-                TableColumn("Resolution") { row in Text(row.resolution).monospacedDigit() }
-                TableColumn("Type") { row in Text(row.kind) }
+                TableColumn("Resolution") { row in
+                    Text(row.resolution).monospacedDigit().accessibilityLabel(row.accessibilityLabel)
+                }
+                TableColumn("Type") { row in Text(row.kind).accessibilityHidden(true) }
                     .width(min: 60, ideal: 80)
                 TableColumn("Rendered At") { row in
-                    Text(row.pixels).monospacedDigit().foregroundStyle(.secondary)
+                    Text(row.pixels).monospacedDigit().foregroundStyle(.secondary).accessibilityHidden(true)
                 }
-                TableColumn("Aspect Ratio") { row in Text(row.aspectRatio).foregroundStyle(.secondary) }
-                    .width(min: 70, ideal: 90)
+                TableColumn("Aspect Ratio") { row in
+                    Text(row.aspectRatio).foregroundStyle(.secondary).accessibilityHidden(true)
+                }
+                .width(min: 70, ideal: 90)
             }
             // Delete does what the Remove button does; nil turns it off while saving.
             .onDeleteCommand(perform: model.canRemoveSelection ? { model.removeSelection() } : nil)

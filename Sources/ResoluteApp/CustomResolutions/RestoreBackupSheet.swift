@@ -35,8 +35,10 @@ struct RestoreBackupSheet: View {
             Text("Entries in this backup")
                 .font(.subheadline.weight(.semibold))
             Table(chosen?.rows ?? []) {
-                TableColumn("Resolution") { row in Text(row.resolution).monospacedDigit() }
-                TableColumn("Type") { row in Text(row.kind) }
+                TableColumn("Resolution") { row in
+                    Text(row.resolution).monospacedDigit().accessibilityLabel(row.accessibilityLabel)
+                }
+                TableColumn("Type") { row in Text(row.kind).accessibilityHidden(true) }
             }
             .frame(minHeight: 120)
             .overlay {

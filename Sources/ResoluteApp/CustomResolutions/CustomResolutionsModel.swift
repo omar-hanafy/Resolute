@@ -19,6 +19,15 @@ final class CustomResolutionsModel {
             let ids = "Vendor \(String(key.vendorID, radix: 16)) · Product \(String(key.productID, radix: 16))"
             return hasOverride ? "\(ids) · Custom" : ids
         }
+
+        /// What VoiceOver reads for the display in the list.
+        var accessibilityLabel: String {
+            [
+                name,
+                isConnected ? "connected" : "not connected",
+                hasOverride ? "has a custom override" : "no custom override",
+            ].joined(separator: ", ")
+        }
     }
 
     /// A row in the resolutions table, identified by its entry, which is unique in a list:
@@ -32,6 +41,27 @@ final class CustomResolutionsModel {
         var pixels: String { entry.pixelSize.map { "\($0.width) × \($0.height)" } ?? "—" }
         var aspectRatio: String {
             entry.pixelSize.map { AspectRatio(width: $0.width, height: $0.height).description } ?? "—"
+        }
+
+        /// The whole row as VoiceOver reads it: "1280 by 800, HiDPI, rendered at 2560 by
+        /// 1600, aspect ratio 16:10". Sizes say "by": "×" is read as "multiplied by".
+        var accessibilityLabel: String {
+            var parts = [resolution.replacingOccurrences(of: "×", with: "by")]
+            switch entry.describedMode {
+            case .hiDPI?:
+                parts.append("HiDPI")
+                if let pixels = entry.pixelSize {
+                    parts.append("rendered at \(pixels.width) by \(pixels.height)")
+                }
+            case .standard?:
+                parts.append("1x")
+            case .preserved?, nil:
+                parts.append("kept as is")
+            }
+            if entry.pixelSize != nil {
+                parts.append("aspect ratio \(aspectRatio)")
+            }
+            return parts.joined(separator: ", ")
         }
     }
 
