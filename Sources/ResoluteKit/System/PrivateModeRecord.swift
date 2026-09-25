@@ -13,10 +13,27 @@ public struct PrivateModeRecord: Hashable, Sendable {
     public var pixelWidth: Int
     public var pixelHeight: Int
     public var refreshRate: Double
-    public var bitsPerSample: Int
+    /// Bits per colour component, when the record's pixel encoding confirms it.
+    public var bitsPerSample: Int?
     public var ioFlags: UInt32
     public var modeID: Int32
     public var scale: Double
+
+    init(
+        index: Int32, width: Int, height: Int, pixelWidth: Int, pixelHeight: Int, refreshRate: Double,
+        bitsPerSample: Int?, ioFlags: UInt32, modeID: Int32, scale: Double
+    ) {
+        self.index = index
+        self.width = width
+        self.height = height
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.refreshRate = refreshRate
+        self.bitsPerSample = bitsPerSample
+        self.ioFlags = ioFlags
+        self.modeID = modeID
+        self.scale = scale
+    }
 
     /// Decodes a record, or returns nil when the bytes do not have the expected layout.
     public init?(bytes: [UInt8]) {
@@ -44,7 +61,12 @@ public struct PrivateModeRecord: Hashable, Sendable {
         self.pixelHeight = pixelHeight
         // 16.16 fixed point, rounded to the millihertz CoreGraphics reports.
         self.refreshRate = (Double(word(0xBC)) / 65_536 * 1_000).rounded() / 1_000
-        self.bitsPerSample = Int(word(0x1C))
+        self.bitsPerSample = Self.confirmedBitsPerSample(
+            bitsPerSample: Int(word(0x1C)),
+            samplesPerPixel: Int(word(0x20)),
+            bitsPerPixel: Int(word(0x18)),
+            encoding: bytes[0x30..<0x70]
+        )
         self.ioFlags = word(0xC0)
         self.modeID = Int32(bitPattern: word(0xC4))
         self.scale = scale
@@ -60,10 +82,26 @@ public struct PrivateModeRecord: Hashable, Sendable {
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight,
             refreshRate: refreshRate,
-            bitsPerSample: bitsPerSample > 0 ? bitsPerSample : nil,
+            bitsPerSample: bitsPerSample,
             ioFlags: ioFlags,
             origin: origin
         )
+    }
+
+    /// The bit depth, or nil unless it matches the pixel encoding string (such as
+    /// "--RRRRRRRRRRGGGGGGGGGGBBBBBBBBBB" for 10 bits) and fits in a pixel.
+    static func confirmedBitsPerSample(
+        bitsPerSample: Int,
+        samplesPerPixel: Int,
+        bitsPerPixel: Int,
+        encoding: ArraySlice<UInt8>
+    ) -> Int? {
+        let characters = encoding.prefix { $0 != 0 }
+        let redBits = characters.filter { $0 == UInt8(ascii: "R") }.count
+        guard bitsPerSample > 0, redBits == bitsPerSample,
+              samplesPerPixel > 0, bitsPerSample * samplesPerPixel <= bitsPerPixel
+        else { return nil }
+        return bitsPerSample
     }
 }
 
@@ -121,5 +159,6 @@ public enum PrivateModeValidator {
             && record.pixelHeight == mode.pixelHeight
             && abs(record.refreshRate - mode.refreshRate) < 0.01
             && abs(record.scale - mode.scale) < 0.01
+            && record.ioFlags == mode.ioFlags
     }
 }

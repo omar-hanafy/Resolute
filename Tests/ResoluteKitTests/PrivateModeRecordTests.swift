@@ -54,6 +54,13 @@ import Testing
         #expect(PrivateModeRecord(bytes: Array(capture.records[0].prefix(0x80))) == nil)
     }
 
+    @Test func dropsABitDepthThatContradictsThePixelEncoding() throws {
+        var bytes = capture.records[0]
+        #expect(try #require(PrivateModeRecord(bytes: bytes)).bitsPerSample == 10)
+        bytes[0x1C] = 8  // the encoding string still has ten R's
+        #expect(try #require(PrivateModeRecord(bytes: bytes)).bitsPerSample == nil)
+    }
+
     @Test func rejectsRecordsWithoutAScale() {
         var bytes = capture.records[0]
         for offset in 0xD0..<0xD4 { bytes[offset] = 0 }
@@ -93,6 +100,16 @@ import Testing
         modes[55].refreshRate = 75
         guard case .untrusted(let reason) = PrivateModeValidator.validate(records: records, against: modes) else {
             Issue.record("expected a disagreement to be reported")
+            return
+        }
+        #expect(reason.contains("1 of 132"))
+    }
+
+    @Test func distrustsRecordsWhoseFlagsDisagree() {
+        var modes = capture.modes
+        modes[10].ioFlags ^= DisplayMode.Flag.defaultMode
+        guard case .untrusted(let reason) = PrivateModeValidator.validate(records: records, against: modes) else {
+            Issue.record("expected a flags disagreement to be reported")
             return
         }
         #expect(reason.contains("1 of 132"))
