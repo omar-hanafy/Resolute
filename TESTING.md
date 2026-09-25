@@ -42,6 +42,8 @@ The automated tests can't see the screen, so these checks need a person, and som
 - [ ] **Save…** asks for the administrator password, and the dialog names Resolute. Cancel leaves everything as it was.
 - [ ] After a save, reconnecting the display or restarting shows the new resolution in the menu.
 - [ ] **Remove Override…** deletes the file. A copy is in `/Library/Application Support/Resolute/Backups`.
+- [ ] Selecting rows and pressing Delete removes exactly those rows; Revert brings them back and clears the selection.
+- [ ] A display whose override file can't be read shows why, with Show in Finder, and Remove Override… when it is a file.
 - [ ] Switching displays, or quitting, with unsaved changes asks first.
 - [ ] `sudo resolute overrides add 2560x1080 -d <display>` and `… remove …` behave the same, and `resolute overrides list` shows the result.
 
