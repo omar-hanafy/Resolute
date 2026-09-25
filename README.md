@@ -100,7 +100,6 @@ The macOS 27 record layout is documented in [docs/design/2026-09-25-resolute-des
 ```sh
 make build       # swift build
 make test        # unit tests (Swift Testing): the library, the command line and the editor
-make test-intel  # the same tests, built for Intel and run under Rosetta
 make lint        # shellcheck on the scripts
 make live-test   # also switches the main display's refresh rate for a moment and back
 make app         # dist/Resolute.app and dist/resolute

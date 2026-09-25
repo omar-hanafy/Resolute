@@ -1,14 +1,10 @@
-.PHONY: build test test-intel lint live-test app release install uninstall icon clean
+.PHONY: build test lint live-test app release install uninstall icon clean
 
 build:
 	swift build
 
 test:
 	swift test
-
-# The same tests, built for Intel and run under Rosetta.
-test-intel:
-	Scripts/test-intel.sh
 
 lint:
 	shellcheck Scripts/*.sh
