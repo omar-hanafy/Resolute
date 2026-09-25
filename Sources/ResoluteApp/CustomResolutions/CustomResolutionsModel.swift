@@ -54,7 +54,11 @@ final class CustomResolutionsModel {
     /// The entries selected in the table. Cleared whenever a list is read or reverted, so
     /// it never carries over to entries that merely look the same.
     var selectedEntries = Set<ScaleResolution>()
+    /// Where the selected display's override comes from, or which file failed to read.
     private(set) var source: OverrideStore.Source = .missing
+    /// Why the selected display's override can't be read. The window shows it in place of
+    /// the editor, so the display stays selected and its file can still be removed.
+    private(set) var readFailure: String?
     private(set) var isWorking = false
     /// A display someone picked while the current one has unsaved changes.
     private(set) var pendingSelection: OverrideKey?
@@ -173,6 +177,7 @@ final class CustomResolutionsModel {
 
     private func load() {
         selectedEntries = []
+        readFailure = nil
         guard let selection else {
             draft = nil
             return
@@ -183,7 +188,15 @@ final class CustomResolutionsModel {
             self.source = source
         } catch {
             draft = nil
-            notice = Notice(title: "The override could not be read", detail: error.localizedDescription)
+            readFailure = error.localizedDescription
+            // Remove Override… and Show in Finder act only on the installed file: Apple's
+            // file is not Resolute's to remove.
+            let installed = store.locations.userFile(for: selection).path(percentEncoded: false)
+            if case ResoluteError.overrideUnreadable(installed, _) = error {
+                source = .installed
+            } else {
+                source = .system
+            }
         }
     }
 

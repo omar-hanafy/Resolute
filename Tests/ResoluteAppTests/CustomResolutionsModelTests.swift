@@ -249,6 +249,84 @@ struct GatedRunner: CommandRunning {
         #expect(model.rows.map(\.entry) == [hd])
         #expect(model.selectedEntries.isEmpty)
     }
+
+    // MARK: - Unreadable overrides
+
+    enum Breakage: CaseIterable, Sendable {
+        case notAPropertyList, folder, noPermission
+
+        /// Root can read any file, so there the permission case cannot be staged.
+        static var stageable: [Breakage] { geteuid() == 0 ? [.notAPropertyList, .folder] : allCases }
+    }
+
+    /// Puts an override file at `url` that cannot be read.
+    func stageUnreadable(_ breakage: Breakage, at url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        switch breakage {
+        case .notAPropertyList:
+            try Data("<plist><dict><key>broken".utf8).write(to: url)
+        case .folder:
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        case .noPermission:
+            try DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]).propertyListData().write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path(percentEncoded: false))
+        }
+    }
+
+    @Test(arguments: Breakage.stageable)
+    func showsAnUnreadableOverrideInPlace(_ breakage: Breakage) throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        let file = OverrideLocations.staged(at: root).userFile(for: key)
+        try stageUnreadable(breakage, at: file)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+
+        #expect(model.selection == key)
+        #expect(model.draft == nil)
+        #expect(model.readFailure?.contains(file.path(percentEncoded: false)) == true)
+        // What Remove Override… and Show in Finder act on.
+        #expect(model.source == .installed)
+        #expect(model.notice == nil)
+    }
+
+    @Test func removingAnUnreadableOverrideLoadsTheDisplay() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        let locations = OverrideLocations.staged(at: root)
+        try stageUnreadable(.notAPropertyList, at: locations.userFile(for: key))
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+
+        await model.removeOverride()
+        #expect(!FileManager.default.fileExists(atPath: locations.userFile(for: key).path(percentEncoded: false)))
+        let backups = locations.backupRoot.appending(path: key.vendorDirectoryName, directoryHint: .isDirectory)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: backups.path(percentEncoded: false)).count == 1)
+        #expect(model.readFailure == nil)
+        #expect(model.draft != nil)
+        #expect(model.source == .missing)
+        #expect(model.targets.first { $0.key == key }?.hasOverride == false)
+    }
+
+    /// Apple's file is not Resolute's to remove, even after showing a display whose
+    /// installed override could be removed.
+    @Test func offersNoRemovalForAnUnreadableSystemOverride() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let locations = OverrideLocations.staged(at: root)
+        let secondKey = OverrideKey(display: second)
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        try stageUnreadable(.folder, at: locations.systemFile(for: secondKey))
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        #expect(model.source == .installed)
+
+        model.requestSelection(secondKey)
+        #expect(model.readFailure?.contains(locations.systemFile(for: secondKey).path(percentEncoded: false)) == true)
+        #expect(model.source == .system)
+        await model.removeOverride()
+        #expect(model.notice == nil)
+        #expect(FileManager.default.fileExists(atPath: locations.systemFile(for: secondKey).path(percentEncoded: false)))
+    }
 }
 
 @MainActor
