@@ -364,7 +364,13 @@ Commit messages describe the change only (no tool attribution).
   looks every half second for 30 seconds. The app listens for screen changes for 2
   minutes and shows nothing while the display is away, and a mode picked for that display
   meanwhile cancels the wait. Keep, chosen while the display is away, fails, since
-  nothing could save the mode later.
+  nothing could save the mode later. The answer itself is judged by what the display
+  shows when it comes: a display that came back in another mode, or was switched
+  elsewhere, is neither saved over nor switched back. The app tries a refused revert again
+  every second, since a display that has only just returned may refuse a mode and then
+  change nothing more. Mode choices made while a countdown is up are ignored: the
+  countdown's timer ends the innermost modal alert, so a second alert or countdown would
+  leave the first one on screen without its revert.
 - **SkyLight is asked only about online displays.** For an ID it never saw,
   `CGDisplayIsOnline` answers -1 (4294967295 under Rosetta), and for a display that went
   away CoreGraphics keeps a 1×1 placeholder mode. So only an answer that is positive as a

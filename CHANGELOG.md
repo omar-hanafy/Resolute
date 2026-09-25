@@ -14,7 +14,9 @@
 
 ### Fixed
 
-- A display can drop off while it tries a hidden mode it cannot show. Resolute then reported a failed revert, and the display could come back in that mode. Now the revert waits for the display and puts the previous mode back when it returns: up to two minutes in the app, which shows nothing meanwhile, and 30 seconds in `resolute set`. A display that comes back in another mode is left alone, as is one you have picked a new mode for.
+- A display can drop off while it tries a hidden mode it cannot show. Resolute then reported a failed revert, and the display could come back in that mode. Now the revert waits for the display and puts the previous mode back when it returns: up to two minutes in the app, which shows nothing meanwhile and tries a refused mode again every second, and 30 seconds in `resolute set`. A display that comes back in another mode is left alone, as is one you have picked a new mode for.
+- Keep saved the mode on trial even when, by the time you answered, the display had come back in another mode or been switched elsewhere, which switched it back to a mode that may have made it drop off. Keep and Revert now go by what the display shows when you answer: a display showing another mode keeps it.
+- After a revert that failed, Resolute suggested `resolute set --default`, which saves the default mode over the one you had. It now says that logging out brings back the mode macOS saved, and `resolute set` prints the command that puts the previous mode back.
 - Resolute could ask the private SkyLight functions about a display that had just gone away. Each call now checks first that the display is still online.
 - The command line read screen names from AppKit off the main thread.
 - Next to a display really named "Studio (1)", two displays named "Studio" could both be called "Studio (1)".
@@ -30,6 +32,7 @@
 ### Changed
 
 - Keep, chosen after the display went away during the countdown, now says the mode was not saved and lasts at most until you log out.
+- A mode chosen in the menu while the Keep/Revert countdown is up is ignored: its own alert or countdown would have stopped the first one from reverting.
 - JSON output always has every documented key, with `null` for a missing value.
 - `resolute modes` labels a resolution Default or Native, like the menu, instead of listing both.
 - The ⌥ hint in the menu counts the resolutions it reveals, not every hidden mode.
