@@ -173,22 +173,27 @@ Makefile                     build / test / app / install / uninstall / clean
 - **Override files**: `ScaleResolution` decodes each `scale-resolutions` entry:
   8 bytes → standard (pixels); 16 bytes with bit 0 of word 2 → HiDPI (pixels, shown as
   points = pixels / 2, flags kept); anything else (12/9-byte, non-HiDPI 16-byte,
-  non-data) → preserved verbatim, shown read-only. 8-byte entries equal to a 16-byte
-  HiDPI entry's backing size are treated as its auto-managed counterpart (RDM
-  behaviour). Encoding writes standard entries, then counterparts, then HiDPI entries,
-  then preserved entries, each group sorted by width then height, descending. New
-  HiDPI entries use flags `0x00000009 / 0x00A00000` (Apple's most common HiDPI
-  combination). Unknown top-level keys are preserved; empty product names are omitted
+  non-data) → preserved verbatim, shown read-only. Every entry is listed and written
+  back exactly as listed: standard entries, then HiDPI entries, each sorted by width then
+  height, descending, then preserved entries in their original order, so a file reads
+  back the way it was saved. Adding a HiDPI entry also adds a standard entry at its pixel
+  size (RDM's pairing) unless one is listed; removing the HiDPI entry removes that
+  partner only when the same edit added it, because a file cannot say why a standard
+  entry is there (see Revisions). New HiDPI entries use flags `0x00000009 / 0x00A00000`
+  (Apple's most common HiDPI combination). Unknown top-level keys are preserved; empty product names are omitted
   instead of written as `""`; `target-default-ppmm` defaults to 10.01 as RDM did.
   Golden test: the owner's existing RDM-written file round-trips unchanged.
-- **`OverrideInstaller`**: writes the plist to a private temp file, then runs one shell
-  script (back up, `mkdir -p`, `cp`, `chmod 644`; files created as root stay owned by
-  root) through a `CommandRunning`: `AdminCommandRunner` (`osascript … with
-  administrator privileges`, off the main thread; user cancel is not an error), or
-  `ShellCommandRunner` (`/bin/sh`, used under `sudo` and by tests against a temp root).
-  Every path is single-quote escaped. The same script first copies an existing file to
-  `/Library/Application Support/Resolute/Backups/`, so the app and `sudo resolute` keep
-  backups in one place.
+- **`OverrideInstaller`**: runs one shell script that carries the plist base64-encoded,
+  so root never reads a file another process could swap. Under `umask 022` it copies an
+  existing file to `/Library/Application Support/Resolute/Backups/` (claiming each
+  backup name with an exclusive create, so overlapping installs keep every backup),
+  writes the new file with `mktemp` beside the destination, sets mode 644 and renames it
+  over the destination. The script runs through a `CommandRunning`: `AdminCommandRunner`
+  (`osascript … with administrator privileges` and a prompt naming Resolute, waited on
+  from a dedicated thread; user cancel is not an error), or `ShellCommandRunner`
+  (`/bin/sh`, used under `sudo` and by tests against a temp root). Every path is
+  single-quote escaped. CLI edits hold a lock (`overrides.lock` beside the backups), so
+  overlapping commands keep each other's entries.
 
 ### App
 
@@ -269,3 +274,21 @@ Commit messages describe the change only (no tool attribution).
   against Apple's files and the owner's existing RDM file; the UI states the caveat.
 - `SMAppService` with an ad-hoc signature may require approval in System Settings; the
   app surfaces the status instead of failing silently.
+
+## Revisions
+
+### 0.2 (2026-09-25)
+
+- **Override lists show every entry.** 0.1 hid a standard entry at a HiDPI entry's
+  pixel size as that entry's "backing" and rewrote it on save. The file cannot say why
+  a standard entry is there, so the guess lost data: Apple's file for the built-in panel
+  lists the native 3456 × 2234 at 1×, and adding 1728 × 1117 HiDPI and removing it again
+  deleted that entry. The pairing now happens only when a HiDPI entry is added, as a
+  visible row.
+- **Hidden-mode trials check that the display switched** before asking to keep the
+  mode: `CGSConfigureDisplayMode` returns nothing, so a mode the display refused looked
+  applied.
+- **Input is bounded where it is parsed**: sizes up to 65535, refresh rates from 1 Hz to
+  10 kHz, scales up to 8. Larger values overflowed later arithmetic and crashed.
+- **Command-line errors come before any change**: contradictory `set` options, a scale
+  or rate given twice, and bad hex IDs are usage errors of the subcommand.
