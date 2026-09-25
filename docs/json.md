@@ -95,5 +95,5 @@ An object:
 | `architecture` | string | `arm64` or `x86_64`. |
 | `translated` | boolean | True when an Intel build runs under Rosetta. |
 | `privateModeFunctions` | boolean | Whether the private SkyLight mode functions exist. |
-| `displays` | array | One object per display: `display` (as in `displays --json`), `override` (`source`, `path`, `entries`, `problem`, as above) and `backups` (a count). |
+| `displays` | array | One object per display: `display` (as in `displays --json`, without `serialNumber`, since people paste this report into public bug reports), `override` (`source`, `path`, `entries`, `problem`, as above) and `backups` (a count). |
 | `otherOverrides` | array | Installed overrides for displays that are not connected: `vendorID`, `productID`, `path`, `entries`, `problem` and `backups`. |

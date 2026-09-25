@@ -49,6 +49,8 @@ struct DisplaySummary: Encodable {
     let modeCount: Int
     let hiddenModeCount: Int
     let hiddenModes: String
+    /// False for `doctor`, whose report people paste into public bug reports.
+    var includesSerialNumber = true
 
     init(index: Int, display: Display) {
         self.index = index
@@ -78,7 +80,9 @@ struct DisplaySummary: Encodable {
         try container.encode(name, forKey: .name)
         try container.encode(vendorID, forKey: .vendorID)
         try container.encode(productID, forKey: .productID)
-        try container.encode(serialNumber, forKey: .serialNumber)
+        if includesSerialNumber {
+            try container.encode(serialNumber, forKey: .serialNumber)
+        }
         try container.encode(isMain, forKey: .isMain)
         try container.encode(isBuiltin, forKey: .isBuiltin)
         try container.encode(isInMirrorSet, forKey: .isInMirrorSet)

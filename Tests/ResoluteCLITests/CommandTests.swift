@@ -555,6 +555,30 @@ import Testing
             == "Error: There is no backup named “nope.plist” of Built-in Retina Display (vendor 610, product a050). List them with `resolute overrides backups`.")
     }
 
+    /// After a reset there is no override to replace, so nothing is backed up, and the
+    /// restore says only what it saved.
+    @Test func claimsNoBackupWhenNoOverrideWasReplaced() async throws {
+        let (root, staged) = try await stagedWithBackups()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await resolute(["overrides", "reset"] + staged)
+        let store = OverrideStore(locations: .staged(at: root))
+        let count = store.backups(for: key).count
+        let output = try await resolute(["overrides", "restore", "1"] + staged).output
+        #expect(output.contains("Saved \(store.locations.userFile(for: key).path(percentEncoded: false)).\n"))
+        #expect(!output.contains("backed up"))
+        #expect(store.backups(for: key).count == count)
+    }
+
+    /// Numbers outside the list, however far, are refused like a missing backup.
+    @Test func refusesBackupNumbersOutsideTheList() async throws {
+        let (root, staged) = try await stagedWithBackups()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for number in ["0", "3", "-1", "9223372036854775807", "-9223372036854775808"] {
+            #expect(await failure(["overrides", "restore"] + staged + ["--", number])?.message
+                == "Error: There is no backup \(number) of Built-in Retina Display (vendor 610, product a050): there are 2. List them with `resolute overrides backups`.")
+        }
+    }
+
     @Test func saysWhenThereAreNoBackups() async throws {
         let root = try stagedRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -653,11 +677,12 @@ import Testing
         #expect(lines[0] == "Resolute \(ResoluteVersion.string)")
         #expect(lines[1].hasPrefix("macOS "))
         #expect(lines.contains("Hidden modes: the private SkyLight functions are \(SkyLight.shared == nil ? "unavailable" : "available")."))
-        #expect(lines.contains("0  Built-in Retina Display (id 1, vendor 610, product a050, serial 0, main, built-in)"))
+        // No serial numbers: people paste this into public bug reports.
+        #expect(lines.contains("0  Built-in Retina Display (id 1, vendor 610, product a050, main, built-in)"))
         #expect(lines.contains("   1728 × 1117 HiDPI (3456 × 2234 px) @ 120 Hz, mode 54"))
         #expect(lines.contains("   6 modes, none hidden; hidden modes available"))
         #expect(lines.contains("   Override: none installed; macOS ships one with 7 entries, named “Color LCD”"))
-        #expect(lines.contains("1  DELL P2419H (id 2, vendor 10ac, product a0c4, serial 0)"))
+        #expect(lines.contains("1  DELL P2419H (id 2, vendor 10ac, product a0c4)"))
         #expect(lines.contains("   5 modes, 2 hidden; hidden modes available"))
         #expect(lines.contains("   Override: none"))
         #expect(lines.contains("Overrides for displays that are not connected:"))
@@ -676,6 +701,12 @@ import Testing
         #expect(report["version"] as? String == ResoluteVersion.string)
         let display = try #require((report["displays"] as? [[String: Any]])?.first)
         #expect(Set(display.keys) == ["display", "override", "backups"])
+        // The same keys as `displays --json`, but no serial number.
+        let summary = try #require(display["display"] as? [String: Any])
+        #expect(Set(summary.keys) == [
+            "index", "id", "name", "vendorID", "productID", "isMain", "isBuiltin", "isInMirrorSet", "currentMode", "modeCount",
+            "hiddenModeCount", "hiddenModes",
+        ])
         let override = try #require(display["override"] as? [String: Any])
         #expect(Set(override.keys) == ["source", "path", "entries", "problem"])
         #expect(override["source"] as? String == "system")

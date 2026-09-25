@@ -442,7 +442,8 @@ struct RestoreBackup: AsyncParsableCommand, ContextCommand {
             }
             let url = try await installer.install(contents: data, for: target.key, expecting: current)
             context.write("Restored \(chosen.fileName), from \(Output.localTime(chosen.date)), for \(target).")
-            context.write("Saved \(url.path(percentEncoded: false)). The override it replaced is backed up too.")
+            let saved = "Saved \(url.path(percentEncoded: false))."
+            context.write(current == .absent ? saved : saved + " The override it replaced is backed up too.")
             context.write(OverridesCommand.reconnectHint)
         }
     }
@@ -453,7 +454,7 @@ struct RestoreBackup: AsyncParsableCommand, ContextCommand {
         let listing = "List them with `resolute overrides backups`."
         guard !backups.isEmpty else { throw ResoluteError.invalidEntry("There are no backups of \(target).") }
         if let number = Int(text) {
-            guard backups.indices.contains(number - 1) else {
+            guard (1...backups.count).contains(number) else {
                 let count = backups.count == 1 ? "there is 1" : "there are \(backups.count)"
                 throw ResoluteError.invalidEntry("There is no backup \(number) of \(target): \(count). \(listing)")
             }

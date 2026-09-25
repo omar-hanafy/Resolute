@@ -186,8 +186,11 @@ struct DoctorReport: Encodable {
         details = displays
         self.displays = displays.enumerated().map { index, display in
             let key = OverrideKey(display: display)
+            var summary = DisplaySummary(index: index, display: display)
+            // People paste this report into public bug reports.
+            summary.includesSerialNumber = false
             return DisplayStatus(
-                display: DisplaySummary(index: index, display: display),
+                display: summary,
                 override: OverrideStatus(key: key, store: store),
                 backups: store.backups(for: key).count
             )
@@ -215,7 +218,6 @@ struct DoctorReport: Encodable {
         for (status, display) in zip(displays, details) {
             var traits = [
                 "id \(display.id)", "vendor \(Output.hex(display.vendorID))", "product \(Output.hex(display.productID))",
-                "serial \(display.serialNumber)",
             ]
             if display.isMain { traits.append("main") }
             if display.isBuiltin { traits.append("built-in") }
