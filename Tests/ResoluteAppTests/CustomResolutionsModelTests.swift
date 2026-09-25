@@ -641,6 +641,187 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         #expect(model.conflict?.change == .save)
     }
 
+    // MARK: - Restore Backup…
+
+    /// Writes a backup of `first`'s override the way the installer names them, made at
+    /// 2026-09-21 `time` UTC, and returns its bytes.
+    @discardableResult
+    func stageBackup(_ override: DisplayOverride?, at time: String, under root: URL, bytes: Data? = nil) throws -> Data {
+        let key = OverrideKey(display: first)
+        let folder = OverrideLocations.staged(at: root).backupFolder(for: key)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let data = try bytes ?? override?.propertyListData() ?? Data()
+        try data.write(to: folder.appending(path: "\(key.productFileName)-20260921-\(time).plist"))
+        return data
+    }
+
+    @Test func listsBackupsNewestFirstWithWhatEachHolds() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: key, productName: "Studio", resolutions: [qhd, hd]), at: "101500", under: root)
+        try stageBackup(DisplayOverride(key: key, resolutions: [.standard(width: 1280, height: 800)]), at: "141320", under: root)
+        try stageBackup(nil, at: "120000", under: root, bytes: Data("not a plist".utf8))
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        #expect(model.canRestoreBackup)
+
+        let choices = model.backupChoices()
+        try #require(choices.count == 3)
+        #expect(choices.map(\.backup.fileName) == [
+            "DisplayProductID-1111-20260921-141320.plist",
+            "DisplayProductID-1111-20260921-120000.plist",
+            "DisplayProductID-1111-20260921-101500.plist",
+        ])
+        #expect(choices[0].detail == "1 entry · keeps the display's own name")
+        #expect(choices[0].rows.map(\.entry) == [.standard(width: 1280, height: 800)])
+        #expect(choices[0].canRestore)
+        // Listed with the reason, and cannot be chosen.
+        #expect(choices[1].detail == "Can't be read: it is not a valid property list")
+        #expect(!choices[1].canRestore)
+        #expect(choices[1].rows.isEmpty)
+        #expect(choices[2].detail == "2 entries · sets the name “Studio”")
+        #expect(choices[2].rows.map(\.entry) == [qhd, hd])
+    }
+
+    /// Backup names are in UTC; people read their own time.
+    @Test func showsWhenABackupWasMadeInLocalTime() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try stageBackup(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), at: "141320", under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        let choice = try #require(model.backupChoices().first)
+        let text = choice.dateText(timeZone: try #require(TimeZone(identifier: "America/New_York")), locale: Locale(identifier: "en_US"))
+        #expect(text.contains("2026"))
+        #expect(text.contains("10:13:20"))
+        #expect(!text.contains("14:13"))
+    }
+
+    @Test func offersRestoreOnlyForADisplayWithBackups() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        #expect(!model.canRestoreBackup)
+        #expect(model.backupChoices().isEmpty)
+    }
+
+    /// The backup is written byte for byte, what it replaces is backed up, and the editor
+    /// shows the restored file.
+    @Test func restoresABackupByteForByte() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        let current = DisplayOverride(key: key, resolutions: [hd])
+        try install(current, under: root)
+        // Bytes Resolute would never write itself: the restore must not re-encode them.
+        let text = try #require(String(data: try DisplayOverride(key: key, productName: "Studio", resolutions: [qhd]).propertyListData(), encoding: .utf8))
+        let bytes = try stageBackup(nil, at: "141320", under: root, bytes: Data(text.replacingOccurrences(of: "\t", with: "  ").utf8))
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        let choice = try #require(model.backupChoices().first)
+
+        await model.restore(choice)
+        #expect(runner.runs == 1)
+        let file = OverrideLocations.staged(at: root).userFile(for: key)
+        #expect(try Data(contentsOf: file) == bytes)
+        #expect(model.rows.map(\.entry) == [qhd])
+        #expect(model.productName == "Studio")
+        #expect(!model.hasChanges)
+        #expect(model.notice?.title == "Backup restored")
+        #expect(model.notice?.detail.contains("Reconnect the display or restart your Mac") == true)
+        let store = OverrideStore(locations: .staged(at: root))
+        #expect(store.backups(for: key).count == 2)
+        #expect(model.backupChoices().count == 2)
+        #expect(try store.contents(of: try #require(store.backups(for: key).first)).override == current.readBack())
+        // What was restored is what the next save expects.
+        _ = model.add(hd)
+        await model.save()
+        #expect(model.conflict == nil)
+        #expect(runner.runs == 2)
+    }
+
+    /// A restore replaces the whole file, so unsaved edits would be lost without a word.
+    @Test func waitsForUnsavedChangesBeforeRestoring() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: key, resolutions: [qhd]), at: "141320", under: root)
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        #expect(model.restoreBackupHelp == "Put back an earlier version of this override.")
+        _ = model.add(.standard(width: 1280, height: 800))
+
+        #expect(!model.canRestoreBackup)
+        #expect(model.restoreBackupHelp == "Save or revert your changes before restoring a backup.")
+        await model.restore(try #require(model.backupChoices().first))
+        #expect(runner.runs == 0)
+        #expect(model.hasChanges)
+        #expect(try installed(key, under: root)?.resolutions == [hd])
+    }
+
+    @Test func cancellingThePasswordLeavesEverything() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: key, resolutions: [qhd]), at: "141320", under: root)
+        let locations = OverrideLocations.staged(at: root)
+        let model = CustomResolutionsModel(
+            service: StubDisplays([first, second]), store: OverrideStore(locations: locations),
+            installer: OverrideInstaller(locations: locations, runner: RefusingRunner())
+        )
+
+        await model.restore(try #require(model.backupChoices().first))
+        #expect(model.notice == nil)
+        #expect(model.conflict == nil)
+        #expect(model.rows.map(\.entry) == [hd])
+        #expect(try installed(key, under: root)?.resolutions == [hd])
+        #expect(OverrideStore(locations: locations).backups(for: key).count == 1)
+    }
+
+    @Test func asksBeforeRestoringOverAFileThatChanged() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: key, resolutions: [qhd]), at: "141320", under: root)
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        let choice = try #require(model.backupChoices().first)
+        try install(theirs, under: root)
+
+        await model.restore(choice)
+        #expect(runner.runs == 0)
+        let conflict = try #require(model.conflict)
+        #expect(conflict.change == .restore(choice))
+        #expect(conflict.proceedTitle == "Restore Anyway")
+        #expect(conflict.discardTitle == "Reload")
+
+        await model.proceed(with: conflict)
+        #expect(runner.runs == 1)
+        #expect(model.rows.map(\.entry) == [qhd])
+        #expect(model.notice?.title == "Backup restored")
+    }
+
+    /// After Remove Override… the file is gone but its backup is not.
+    @Test func restoresAfterTheOverrideWasRemoved() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        await model.removeOverride()
+        #expect(model.source == .missing)
+        #expect(model.canRestoreBackup)
+
+        await model.restore(try #require(model.backupChoices().first))
+        #expect(model.source == .installed)
+        #expect(model.rows.map(\.entry) == [hd])
+        #expect(model.targets.first { $0.key == key }?.hasOverride == true)
+    }
+
     // MARK: - Unreadable overrides
 
     enum Breakage: CaseIterable, Sendable {

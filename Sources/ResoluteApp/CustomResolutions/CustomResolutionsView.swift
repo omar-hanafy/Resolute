@@ -121,17 +121,18 @@ private struct UnreadableOverride: View {
         } description: {
             Text(reason)
         } actions: {
-            if model.source == .installed {
-                InstalledOverrideActions(model: model)
-            }
+            OverrideFileActions(model: model)
         }
     }
 }
 
-/// Remove Override… and Show in Finder, for an override file under the user root.
-private struct InstalledOverrideActions: View {
+/// Remove Override… and Show in Finder, for an override file under the user root, and
+/// Restore Backup… for a display with backups.
+private struct OverrideFileActions: View {
     let model: CustomResolutionsModel
     @State private var isConfirmingRemoval = false
+    @State private var isChoosingBackup = false
+    @State private var chosenBackup: CustomResolutionsModel.BackupChoice?
 
     var body: some View {
         if model.canRemoveOverride {
@@ -142,7 +143,24 @@ private struct InstalledOverrideActions: View {
                     Text("macOS goes back to the display's default resolutions after you reconnect it or restart. A backup is kept.")
                 }
         }
-        Button("Show in Finder") { model.revealInFinder() }
+        if !model.backups.isEmpty {
+            Button("Restore Backup…") { isChoosingBackup = true }
+                .disabled(!model.canRestoreBackup)
+                .help(model.restoreBackupHelp)
+                // Restores once the sheet is gone, so a question about the file can show.
+                .sheet(isPresented: $isChoosingBackup, onDismiss: restoreChosenBackup) {
+                    RestoreBackupSheet(model: model) { chosenBackup = $0 }
+                }
+        }
+        if model.source == .installed {
+            Button("Show in Finder") { model.revealInFinder() }
+        }
+    }
+
+    private func restoreChosenBackup() {
+        guard let choice = chosenBackup else { return }
+        chosenBackup = nil
+        Task { await model.restore(choice) }
     }
 }
 
@@ -242,9 +260,7 @@ private struct OverrideEditor: View {
             .fixedSize(horizontal: false, vertical: true)
 
             HStack {
-                if model.source == .installed {
-                    InstalledOverrideActions(model: model)
-                }
+                OverrideFileActions(model: model)
                 Spacer()
                 if model.isWorking {
                     ProgressView().controlSize(.small)

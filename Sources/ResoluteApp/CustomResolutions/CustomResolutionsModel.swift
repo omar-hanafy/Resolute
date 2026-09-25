@@ -42,18 +42,55 @@ final class CustomResolutionsModel {
         var detail: String
     }
 
-    /// A save or removal held back because the override's file changed after it was
-    /// read, by another app or the `resolute` command. No password is asked for until the
-    /// person has seen this.
+    /// A backup Restore Backup… offers, read when the list opens.
+    struct BackupChoice: Identifiable, Equatable {
+        var backup: OverrideBackup
+        /// The override the backup holds, and its bytes, which a restore writes as they are.
+        var contents: (override: DisplayOverride, data: Data)?
+        /// Why the backup can't be read; it is listed, but cannot be chosen.
+        var failure: String?
+
+        var id: URL { backup.id }
+        var canRestore: Bool { contents != nil }
+
+        /// "2 entries · sets the name “Studio”", or why it can't be read.
+        var detail: String {
+            guard let override = contents?.override else { return "Can't be read: \(failure ?? "unknown reason")" }
+            let count = override.resolutions.count
+            let entries = count == 1 ? "1 entry" : "\(count) entries"
+            let name = override.productName.map { "sets the name “\($0)”" } ?? "keeps the display's own name"
+            return "\(entries) · \(name)"
+        }
+
+        /// The backup's entries, as the table shows them.
+        var rows: [Row] {
+            (contents?.override.resolutions ?? []).map { Row(entry: $0) }
+        }
+
+        /// When the backup was made. Its name has the time in UTC; people read their own.
+        func dateText(timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+            backup.date.formatted(Date.FormatStyle(date: .abbreviated, time: .standard, locale: locale, timeZone: timeZone))
+        }
+
+        static func == (lhs: BackupChoice, rhs: BackupChoice) -> Bool {
+            lhs.backup == rhs.backup && lhs.contents?.data == rhs.contents?.data && lhs.failure == rhs.failure
+        }
+    }
+
+    /// A save, removal or restore held back because the override's file changed after it
+    /// was read, by another app or the `resolute` command. No password is asked for until
+    /// the person has seen this.
     struct Conflict: Identifiable {
         enum Change: Equatable {
             case save
             case remove
+            case restore(BackupChoice)
 
             var failureTitle: String {
                 switch self {
                 case .save: "The override could not be saved"
                 case .remove: "The override could not be removed"
+                case .restore: "The backup could not be restored"
                 }
             }
         }
@@ -82,15 +119,20 @@ final class CustomResolutionsModel {
                 text += " \(discardTitle) shows what macOS uses now."
             case .remove:
                 text += " \(proceedTitle ?? "") removes it as it is now, keeping a backup, and \(discardTitle) opens it first."
+            case .restore where removed:
+                text += " \(proceedTitle ?? "") puts the backup back, and \(discardTitle) shows what macOS uses now."
+            case .restore:
+                text += " \(proceedTitle ?? "") replaces it with the backup, keeping a backup of it, and \(discardTitle) opens it first."
             }
             return text
         }
 
-        /// Save Anyway or Remove Anyway; nil when there is nothing left to do.
+        /// Save Anyway, Remove Anyway or Restore Anyway; nil when there is nothing left to do.
         var proceedTitle: String? {
             switch change {
             case .save: "Save Anyway"
             case .remove: current == .absent ? nil : "Remove Anyway"
+            case .restore: "Restore Anyway"
             }
         }
 
@@ -118,6 +160,8 @@ final class CustomResolutionsModel {
     /// What the installed file (the one a save replaces) held at the read that loaded the
     /// override on screen. Nil when that file could not be read, such as without permission.
     private(set) var installedState: OverrideFileState?
+    /// Backups of the selected display's override, newest first.
+    private(set) var backups: [OverrideBackup] = []
     private(set) var isWorking = false
     /// A display someone picked while the current one has unsaved changes.
     private(set) var pendingSelection: OverrideKey?
@@ -161,6 +205,17 @@ final class CustomResolutionsModel {
         guard let selection, source == .installed else { return false }
         let path = store.locations.userFile(for: selection).path(percentEncoded: false)
         return FileManager.default.fileExists(atPath: path) && !hasFolder(inPlaceOf: selection)
+    }
+
+    /// Whether Restore Backup… can run: the display has backups, and no unsaved changes
+    /// would be lost. A folder in the file's place is never written over.
+    var canRestoreBackup: Bool {
+        guard let selection, !backups.isEmpty, !hasChanges, !isWorking else { return false }
+        return !hasFolder(inPlaceOf: selection)
+    }
+
+    var restoreBackupHelp: String {
+        hasChanges ? "Save or revert your changes before restoring a backup." : "Put back an earlier version of this override."
     }
 
     /// Whether a folder sits where `key`'s installed file goes.
@@ -267,6 +322,7 @@ final class CustomResolutionsModel {
         guard !isWorking, conflict == nil else { return }
         reloadTargets()
         guard let selection else { return }
+        backups = store.backups(for: selection)
         // An override that could not be read has nothing to lose.
         guard draft != nil else {
             load()
@@ -292,8 +348,10 @@ final class CustomResolutionsModel {
         guard let selection else {
             draft = nil
             installedState = nil
+            backups = []
             return
         }
+        backups = store.backups(for: selection)
         do {
             let file = try store.editableFile(for: selection)
             draft = OverrideDraft(file.override)
@@ -361,6 +419,28 @@ final class CustomResolutionsModel {
         await attempt(.remove, on: selection)
     }
 
+    // MARK: - Backups
+
+    /// The selected display's backups, newest first, with what each holds.
+    func backupChoices() -> [BackupChoice] {
+        guard let selection else { return [] }
+        return store.backups(for: selection).map { backup in
+            do {
+                return BackupChoice(backup: backup, contents: try store.contents(of: backup))
+            } catch ResoluteError.overrideUnreadable(_, let reason) {
+                return BackupChoice(backup: backup, failure: reason)
+            } catch {
+                return BackupChoice(backup: backup, failure: error.localizedDescription)
+            }
+        }
+    }
+
+    /// Writes `choice`'s backup back as it is; the installer backs up the file it replaces.
+    func restore(_ choice: BackupChoice) async {
+        guard let key = selection, choice.backup.key == key, choice.canRestore, canRestoreBackup else { return }
+        await attempt(.restore(choice), on: key)
+    }
+
     // MARK: - Changes on disk
 
     /// Goes ahead with a change after the person has seen that the file changed: Save
@@ -421,6 +501,7 @@ final class CustomResolutionsModel {
                     source = .installed
                     installedState = .contents(data)
                     changedOnDisk = false
+                    backups = store.backups(for: key)
                 }
                 notice = Notice(
                     title: "Custom resolutions saved",
@@ -432,6 +513,15 @@ final class CustomResolutionsModel {
                 notice = Notice(
                     title: "Override removed",
                     detail: "A backup is in \(store.locations.backupRoot.path(percentEncoded: false)). Reconnect the display or restart your Mac to go back to its default resolutions."
+                )
+            case .restore(let choice):
+                guard let data = choice.contents?.data else { return }
+                try await installer.install(contents: data, for: key, expecting: state)
+                load()
+                notice = Notice(
+                    title: "Backup restored",
+                    detail: "Reconnect the display or restart your Mac to use it."
+                        + (state == .absent ? "" : " The file it replaced is in the backups too.")
                 )
             }
             reloadTargets()
