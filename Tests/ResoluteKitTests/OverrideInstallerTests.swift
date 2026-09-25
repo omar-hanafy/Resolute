@@ -214,6 +214,14 @@ actor EventLog {
     func add(_ event: String) {
         events.append(event)
     }
+
+    /// Waits up to five seconds for `event`, so tests start the next step only once the
+    /// previous one has happened, however busy the machine is.
+    func waitFor(_ event: String) async {
+        for _ in 0..<500 where !events.contains(event) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
 }
 
 @Suite struct OverrideLockTests {
@@ -227,7 +235,7 @@ actor EventLog {
             try? await Task.sleep(for: .milliseconds(300))
             await log.add("first out")
         }
-        try await Task.sleep(for: .milliseconds(50))
+        await log.waitFor("first in")
         async let second: Void = lock.withLock {
             await log.add("second in")
             await log.add("second out")
@@ -255,9 +263,10 @@ actor EventLog {
         let file = root.appending(path: "overrides.lock")
         let log = EventLog()
         async let holder: Void = OverrideLock(file: file).withLock {
+            await log.add("held")
             try? await Task.sleep(for: .milliseconds(800))
         }
-        try await Task.sleep(for: .milliseconds(50))
+        await log.waitFor("held")
         let started = ContinuousClock.now
         await #expect(throws: ResoluteError.overridesBusy) {
             try await OverrideLock(file: file, timeout: .milliseconds(200)).withLock(onWait: { Task { await log.add("waiting") } }) {}
@@ -265,17 +274,19 @@ actor EventLog {
         #expect(ContinuousClock.now - started < .milliseconds(600))
         try await holder
         try await Task.sleep(for: .milliseconds(20))
-        #expect(await log.events == ["waiting"])
+        #expect(await log.events == ["held", "waiting"])
     }
 
     @Test func stopsWaitingWhenCancelled() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appending(path: "overrides.lock")
+        let log = EventLog()
         async let holder: Void = OverrideLock(file: file).withLock {
+            await log.add("held")
             try? await Task.sleep(for: .milliseconds(800))
         }
-        try await Task.sleep(for: .milliseconds(50))
+        await log.waitFor("held")
         let waiter = Task { try await OverrideLock(file: file).withLock {} }
         try await Task.sleep(for: .milliseconds(100))
         let started = ContinuousClock.now
