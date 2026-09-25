@@ -142,6 +142,10 @@ struct CommandContext: Sendable {
     var confirmHiddenMode: @Sendable () -> ModeSwitcher.Decision
     /// Writing to /Library needs root.
     var isRoot: Bool
+    /// How long `set` waits for a display that went away during a trial to come back, and
+    /// how often it looks, in seconds.
+    var restoreTimeout: TimeInterval = 30
+    var restorePollInterval: TimeInterval = 0.5
 
     static var live: CommandContext {
         CommandContext(

@@ -33,8 +33,8 @@ The automated tests can't see the screen, so these checks need a person, and som
 - [ ] With ⌥ held, a hidden mode (marked ⚠) switches and shows "Keep this display mode?" with a countdown.
 - [ ] Doing nothing, pressing Return or pressing Escape brings the previous mode back. Keep keeps the new mode.
 - [ ] A mode the display can't show comes back by itself when the countdown ends.
+- [ ] A display that drops off during the countdown and reconnects comes back in its previous mode, with no alert while it is away. The app waits up to two minutes for it; `resolute set` says it is waiting and gives up after 30 seconds.
 - [ ] `resolute modes --all --raw` lists the hidden modes. `resolute set --mode-id <id> --allow-hidden` asks in the terminal: `y` keeps the mode, anything else or 15 seconds reverts it.
-- [ ] Unplugging the display during the countdown and plugging it back in brings the previous mode back, in the menu and in the terminal.
 - [ ] After Keep, log out and back in. Note whether the hidden mode is still in use: macOS saves modes by size and refresh rate, and may not bring back one it does not list.
 
 ### Custom resolutions (an external display; Apple silicon may ignore scaled ones)
@@ -62,4 +62,4 @@ The automated tests can't see the screen, so these checks need a person, and som
 - [ ] If the old app is asking about unsaved custom resolutions, `make install` stops and says so.
 - [ ] `make uninstall` turns off Launch at Login and removes the app and the `resolute` link. Overrides and backups stay.
 
-If something misbehaves, include the output of `resolute doctor` (and `resolute modes --all --raw` for mode problems) when you report it.
+If something misbehaves, include the output of `resolute doctor` (and `resolute modes --all --raw` for mode problems) when you report it, and what Resolute logged: `log show --predicate 'subsystem == "com.omarhanafy.Resolute"' --info --last 1h`.

@@ -27,7 +27,9 @@ public struct SystemDisplayService: DisplayControlling {
         let names = DisplayNames.disambiguate(ids.map {
             screenNames[$0] ?? DisplayNames.coreDisplayName(for: $0) ?? DisplayNames.fallbackName(for: $0)
         })
-        return zip(ids, names).map { makeDisplay(id: $0, name: $1) }
+        // A display that dropped off while its part was read is left out: CoreGraphics lists a
+        // 1 × 1 placeholder mode, as the current one too, for a display that went away.
+        return zip(ids, names).map { makeDisplay(id: $0, name: $1) }.filter { Self.isOnline($0.id) }
     }
 
     public func currentModeID(of displayID: CGDirectDisplayID) -> Int32? {
@@ -35,6 +37,8 @@ public struct SystemDisplayService: DisplayControlling {
     }
 
     public func apply(modeID: Int32, to displayID: CGDirectDisplayID, scope: ConfigurationScope) throws {
+        // CoreGraphics still lists a placeholder mode for a display that went away.
+        guard Self.isOnline(displayID) else { throw ResoluteError.displayNotFound("id:\(displayID)") }
         if let mode = Self.systemModes(for: displayID).first(where: { $0.ioDisplayModeID == modeID }) {
             try configure(scope: scope) { config in
                 try check(CGConfigureDisplayWithDisplayMode(config, displayID, mode, nil), "select the display mode")
@@ -61,6 +65,9 @@ public struct SystemDisplayService: DisplayControlling {
     func apply(privateIndex: Int32, to displayID: CGDirectDisplayID, scope: ConfigurationScope) throws {
         guard let skyLight else { throw ResoluteError.modeNotFound("private mode \(privateIndex)", suggestions: []) }
         try configure(scope: scope) { config in
+            // Checked last thing before SkyLight is asked: a display can go away at any time,
+            // and what SkyLight does with one that has is undefined.
+            guard Self.isOnline(displayID) else { throw ResoluteError.displayNotFound("id:\(displayID)") }
             skyLight.configure(config, display: displayID, index: privateIndex)
         }
     }
@@ -71,18 +78,8 @@ public struct SystemDisplayService: DisplayControlling {
         var modes = Self.systemModes(for: id).map(DisplayMode.init(systemMode:))
         var currentID = currentModeID(of: id)
         var status = PrivateModeStatus.unavailable
-
         if let skyLight {
-            switch PrivateModeValidator.validate(records: skyLight.records(for: id), against: modes) {
-            case .trusted(let records, let hidden):
-                status = .trusted
-                (modes, currentID) = ModeMerge.merge(
-                    systemModes: modes, records: records, hidden: hidden,
-                    currentModeID: currentID, currentPrivateIndex: skyLight.currentModeIndex(for: id)
-                )
-            case .untrusted(let reason):
-                status = .untrusted(reason: reason)
-            }
+            status = addPrivateModes(from: skyLight, display: id, to: &modes, currentID: &currentID)
         }
 
         let mirrorSource = CGDisplayMirrorsDisplay(id)
@@ -102,8 +99,31 @@ public struct SystemDisplayService: DisplayControlling {
         )
     }
 
+    /// Adds the hidden modes and the private indexes when SkyLight's records check out. Each
+    /// SkyLight call is made only while the display is online: a display that cannot show a
+    /// mode may drop off at any moment, and what SkyLight does with one that has is undefined.
+    private func addPrivateModes(
+        from skyLight: SkyLight,
+        display id: CGDirectDisplayID,
+        to modes: inout [DisplayMode],
+        currentID: inout Int32?
+    ) -> PrivateModeStatus {
+        guard Self.isOnline(id) else { return .untrusted(reason: "the display went offline") }
+        switch PrivateModeValidator.validate(records: skyLight.records(for: id), against: modes) {
+        case .trusted(let records, let hidden):
+            let currentIndex = Self.isOnline(id) ? skyLight.currentModeIndex(for: id) : nil
+            (modes, currentID) = ModeMerge.merge(
+                systemModes: modes, records: records, hidden: hidden,
+                currentModeID: currentID, currentPrivateIndex: currentIndex
+            )
+            return .trusted
+        case .untrusted(let reason):
+            return .untrusted(reason: reason)
+        }
+    }
+
     private func hiddenModeIndex(_ modeID: Int32, display: CGDirectDisplayID) -> Int32? {
-        guard let skyLight else { return nil }
+        guard let skyLight, Self.isOnline(display) else { return nil }
         let systemModes = Self.systemModes(for: display).map(DisplayMode.init(systemMode:))
         guard case .trusted(_, let hidden) = PrivateModeValidator.validate(
             records: skyLight.records(for: display), against: systemModes
@@ -119,6 +139,13 @@ public struct SystemDisplayService: DisplayControlling {
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
         guard CGGetOnlineDisplayList(count, &ids, &count) == .success else { return [] }
         return Array(ids.prefix(Int(count)))
+    }
+
+    /// Whether `display` is online now. CoreGraphics answers -1, which is not false, for an
+    /// ID it has never seen, and on Intel that arrives unsigned, so only an answer that is
+    /// positive as a signed 32-bit value counts.
+    static func isOnline(_ display: CGDirectDisplayID) -> Bool {
+        Int32(truncatingIfNeeded: CGDisplayIsOnline(display)) > 0
     }
 
     static func systemModes(for display: CGDirectDisplayID) -> [CGDisplayMode] {

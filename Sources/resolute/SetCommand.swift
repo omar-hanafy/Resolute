@@ -130,7 +130,10 @@ struct SetCommand: ParsableCommand, ContextCommand {
         case .applied, .kept, .keptForSession:
             // The full snapshot, since CoreGraphics may not name a hidden mode in use.
             guard switcher.currentModeID(of: display.id) == mode.modeID else {
-                context.writeError("warning: macOS accepted the change but reports a different mode now.")
+                let isGone = !service.displays().contains { $0.id == display.id }
+                context.writeError(isGone
+                    ? "warning: \(display.name) went away, so its new mode could not be checked."
+                    : "warning: macOS accepted the change but reports a different mode now.")
                 return
             }
             let until = outcome == .keptForSession ? " (until you log out)" : ""
@@ -138,6 +141,55 @@ struct SetCommand: ParsableCommand, ContextCommand {
         case .reverted(let modeID):
             let restored = display.modes.first { $0.modeID == modeID }
             context.write("Kept the previous mode: \(restored.map(Output.describe) ?? "mode \(modeID)").")
+        case .restorePending(let pending):
+            try Self.finishRestore(pending, with: switcher, on: display, in: context)
+        }
+    }
+
+    /// Waits for a display that went away during a trial to come back, undoes the trial
+    /// and says how the display came back. A command gets no display notifications, so it
+    /// looks every `restorePollInterval` until `restoreTimeout`, also after a failed try:
+    /// a display that has only just come back may not take a mode yet.
+    static func finishRestore(
+        _ pending: ModeSwitcher.PendingRestore, with switcher: ModeSwitcher, on display: Display, in context: CommandContext
+    ) throws {
+        context.writeError("\(pending.displayName) went away. Waiting for it to come back to restore the previous mode…")
+        let deadline = ContinuousClock.now + .seconds(context.restoreTimeout)
+        var progress = ModeSwitcher.RestoreProgress.waiting
+        // The failure from the last try, while the display is back; one that went away again
+        // clears it. Only the first failure is logged.
+        var lastError: (any Error)?
+        var hasFailed = false
+        while progress == .waiting {
+            do {
+                progress = try switcher.finish(pending, logsFailures: !hasFailed)
+                lastError = nil
+            } catch {
+                lastError = error
+                hasFailed = true
+            }
+            guard progress == .waiting else { break }
+            guard ContinuousClock.now < deadline else {
+                switcher.giveUp(on: pending, after: .seconds(context.restoreTimeout))
+                throw lastError ?? ResoluteError.displayDidNotReturn(display: pending.displayName)
+            }
+            Thread.sleep(forTimeInterval: context.restorePollInterval)
+        }
+        // A mode that never showed is an error whether or not the display went away.
+        if let failure = pending.failure { throw failure }
+        func describe(_ modeID: Int32) -> String {
+            display.modes.first { $0.modeID == modeID }.map(Output.describe) ?? "mode \(modeID)"
+        }
+        switch progress {
+        case .restored(let modeID):
+            let which = modeID == pending.modeID ? "the previous mode" : "its default mode"
+            context.write("\(pending.displayName) is back. Restored \(which): \(describe(modeID)).")
+        case .leftAlone(let current) where current == pending.modeID:
+            context.write("\(pending.displayName) is back with the previous mode: \(describe(current)).")
+        case .leftAlone(let current):
+            context.write("\(pending.displayName) is back with \(describe(current)), so it was left as it is.")
+        case .waiting:
+            break
         }
     }
 

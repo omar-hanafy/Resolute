@@ -36,6 +36,31 @@ struct LiveDisplayTests {
         #expect(service.currentModeID(of: main.id) == current.modeID)
     }
 
+    /// A trial through the check hidden modes get (the display must report the mode within
+    /// half a second before anyone is asked), then the previous mode is put back. This Mac
+    /// has no hidden modes, so a listed refresh rate stands in; the resolution never changes.
+    /// Everything is for this process only, so CoreGraphics undoes it when the tests end,
+    /// even if they crash.
+    @Test func triesARefreshRateTheWayHiddenModesAreTriedAndPutsItBack() throws {
+        let (main, current, sibling) = try refreshSibling()
+        defer {
+            if service.currentModeID(of: main.id) != current.modeID {
+                try? service.apply(modeID: current.modeID, to: main.id, scope: .app)
+            }
+        }
+        var switcher = ModeSwitcher(service: service)
+        switcher.verifiesListedModes = true
+        switcher.trialScope = .app
+        var shownWhenAsked: Int32?
+        let outcome = try switcher.apply(modeID: sibling.modeID, to: main.id, trial: true) {
+            shownWhenAsked = service.currentModeID(of: main.id)
+            return .revert
+        }
+        #expect(shownWhenAsked == sibling.modeID)
+        #expect(outcome == .reverted(to: current.modeID))
+        #expect(service.currentModeID(of: main.id) == current.modeID)
+    }
+
     /// The main display, its current mode, and a mode with the same size at another refresh rate.
     private func refreshSibling() throws -> (Display, DisplayMode, DisplayMode) {
         let main = try #require(service.displays().first { $0.isMain })
