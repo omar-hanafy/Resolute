@@ -140,9 +140,10 @@ public struct SystemDisplayService: DisplayControlling {
     }
 
     /// Whether `display` is online now. CoreGraphics answers -1, which is not false, for an
-    /// ID it has never seen, so only a positive answer counts.
+    /// ID it has never seen, and on Intel that arrives unsigned, so only an answer that is
+    /// positive as a signed 32-bit value counts.
     static func isOnline(_ display: CGDirectDisplayID) -> Bool {
-        CGDisplayIsOnline(display) > 0
+        Int32(truncatingIfNeeded: CGDisplayIsOnline(display)) > 0
     }
 
     static func systemModes(for display: CGDirectDisplayID) -> [CGDisplayMode] {
