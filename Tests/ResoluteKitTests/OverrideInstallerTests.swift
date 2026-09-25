@@ -232,8 +232,57 @@ actor EventLog {
             await log.add("second in")
             await log.add("second out")
         }
-        _ = await (first, second)
+        _ = try await (first, second)
         #expect(await log.events == ["first in", "first out", "second in", "second out"])
+    }
+
+    @Test(.enabled(if: geteuid() != 0, "root can open any file"))
+    func refusesToEditWithoutTheLock() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appending(path: "overrides.lock")
+        FileManager.default.createFile(atPath: file.path(percentEncoded: false), contents: nil, attributes: [.posixPermissions: 0])
+        var ran = false
+        await #expect(throws: ResoluteError.lockUnavailable(path: file.path(percentEncoded: false), reason: "permission denied")) {
+            try await OverrideLock(file: file).withLock { ran = true }
+        }
+        #expect(!ran)
+    }
+
+    @Test func givesUpWaitingAfterItsTimeoutAndSaysItIsWaiting() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appending(path: "overrides.lock")
+        let log = EventLog()
+        async let holder: Void = OverrideLock(file: file).withLock {
+            try? await Task.sleep(for: .milliseconds(800))
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        let started = ContinuousClock.now
+        await #expect(throws: ResoluteError.overridesBusy) {
+            try await OverrideLock(file: file, timeout: .milliseconds(200)).withLock(onWait: { Task { await log.add("waiting") } }) {}
+        }
+        #expect(ContinuousClock.now - started < .milliseconds(600))
+        try await holder
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(await log.events == ["waiting"])
+    }
+
+    @Test func stopsWaitingWhenCancelled() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appending(path: "overrides.lock")
+        async let holder: Void = OverrideLock(file: file).withLock {
+            try? await Task.sleep(for: .milliseconds(800))
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        let waiter = Task { try await OverrideLock(file: file).withLock {} }
+        try await Task.sleep(for: .milliseconds(100))
+        let started = ContinuousClock.now
+        waiter.cancel()
+        await #expect(throws: CancellationError.self) { try await waiter.value }
+        #expect(ContinuousClock.now - started < .milliseconds(300))
+        try await holder
     }
 
     @Test func sitsBesideTheBackups() {

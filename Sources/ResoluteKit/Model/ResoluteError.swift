@@ -20,6 +20,8 @@ public enum ResoluteError: Error, Equatable, Sendable {
     case commandFailed(status: Int32, message: String)
     case cancelled
     case needsRoot
+    case lockUnavailable(path: String, reason: String)
+    case overridesBusy
     /// A command-line mistake found after parsing.
     case usage(String)
 }
@@ -65,6 +67,10 @@ extension ResoluteError: LocalizedError {
             "The operation was cancelled."
         case .usage(let message):
             message
+        case .lockUnavailable(let path, let reason):
+            "Could not use the lock file \(path): \(reason). Remove it and try again."
+        case .overridesBusy:
+            "Another Resolute command has been editing overrides for too long. Try again when it has finished."
         case .needsRoot:
             "Writing display overrides needs administrator rights. Run the command with sudo, or use the Resolute app."
         }
