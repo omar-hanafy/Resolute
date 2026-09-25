@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.3.0 — 2026-09-25
+
+### Added
+
+- Backups: `resolute overrides backups` lists a display's backups with their local dates, `restore` puts one back byte for byte (backing up the file it replaces) and `prune` deletes all but the newest. In the app, **Restore Backup…** in the editor does the same, showing what each backup holds.
+- The editor notices when its override changed on disk, through another app or the `resolute` command. It reads the file again when you come back to it, keeps unsaved changes under a banner, and asks before saving over the new version.
+- A note when an edit leaves a HiDPI entry without the 1× entry at its pixel size, which Resolute and RDM add with each HiDPI entry. The editor offers **Add 1× Entry**; `resolute overrides remove` prints the command that puts it back.
+- `resolute doctor`: a read-only report for bug reports, with versions, displays, modes, overrides and backups, also as JSON. It leaves out serial numbers.
+- Logging: each mode switch and each change to an override file, or why it failed. `log show --predicate 'subsystem == "com.omarhanafy.Resolute"' --info --last 1h` shows the last hour.
+- VoiceOver: an editor row reads as one line, such as "1280 by 800, HiDPI, rendered at 2560 by 1600", the display list says which displays are connected and have an override, and the menu names hidden modes.
+- `docs/json.md` documents every key of the JSON output, and `docs/new-macos-release.md` what to check on each new macOS release.
+
+### Fixed
+
+- A display can drop off while it tries a hidden mode it cannot show. Resolute then reported a failed revert, and the display could come back in that mode. Now the revert waits for the display and puts the previous mode back when it returns: up to two minutes in the app, which shows nothing meanwhile, and 30 seconds in `resolute set`. A display that comes back in another mode is left alone, as is one you have picked a new mode for.
+- Resolute could ask the private SkyLight functions about a display that had just gone away. Each call now checks first that the display is still online.
+- The command line read screen names from AppKit off the main thread.
+- Next to a display really named "Studio (1)", two displays named "Studio" could both be called "Studio (1)".
+- Saving a copy of Apple's override re-sorted its entries. 167 of the 251 files macOS 27 ships that list resolutions use an order of their own; Resolute now keeps each file's order.
+- The app and `sudo resolute overrides …` could both edit an override at the same time, and a save in one silently replaced a change made in the other. Every change now checks that the file is still what it was based on, and the app takes the command line's lock.
+- Under a strict umask, the first `sudo resolute overrides …` made `/Library/Application Support/Resolute` readable only by root, which hid the backups from the app. It is now made readable by everyone. A folder made that way keeps its permissions; `sudo chmod 755 "/Library/Application Support/Resolute"` fixes it.
+- `@0x3c`, `--refresh 6e1` and other non-decimal numbers were read as rates and scales (0x3c is 60).
+- `resolute set 2992x1934@2x` did not suggest 1496 × 967 HiDPI, the mode that renders at that size.
+- On a case-sensitive volume, an override folder named in uppercase, which macOS does not read, was listed.
+- An override entry with a size a file cannot hold crashed instead of reporting an error.
+- A failed privileged script reported osascript's wrapper ("0:204: execution error: … (1)") instead of its own message.
+
+### Changed
+
+- Keep, chosen after the display went away during the countdown, now says the mode was not saved and lasts at most until you log out.
+- JSON output always has every documented key, with `null` for a missing value.
+- `resolute modes` labels a resolution Default or Native, like the menu, instead of listing both.
+- The ⌥ hint in the menu counts the resolutions it reveals, not every hidden mode.
+- `resolute overrides reset` says how to undo it.
+- At its smallest size the editor moves Revert and Save… to a second row instead of cutting button titles short.
+- `make release` builds the zip, the disk image and their checksums, with the version's notes for a GitHub release, and `SIGN_IDENTITY` signs with a real certificate. CI lints and tests on the oldest and newest supported Xcode.
+
 ## 0.2.0 — 2026-09-25
 
 ### Fixed
