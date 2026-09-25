@@ -45,12 +45,13 @@ public struct ModeSwitcher: Sendable {
 
         try service.apply(modeID: modeID, to: displayID, scope: trial ? .session : .permanent)
         guard trial else { return .applied }
-        // SkyLight reports no errors, so check the display really switched before asking
-        // whether to keep the mode.
-        guard waitUntilCurrent(modeID, on: displayID) else {
+        // SkyLight reports no errors, so check that a hidden mode really took before asking
+        // whether to keep it; CoreGraphics reports its own failures for listed modes.
+        let isListed = before?.modes.first { $0.modeID == modeID }?.origin == .system
+        if !isListed, !waitUntilCurrent(modeID, on: displayID) {
             // Put the previous mode back in case the switch lands after all; when it never
             // happened this changes nothing.
-            if let previous { try? service.apply(modeID: previous, to: displayID, scope: .session) }
+            _ = try restore(before: before, previous: previous, leaving: modeID, on: displayID)
             throw ResoluteError.modeNotApplied(display: before?.name ?? "The display")
         }
 
@@ -61,18 +62,28 @@ public struct ModeSwitcher: Sendable {
         case .keepForSession:
             return .keptForSession
         case .revert:
-            let fallback = before?.modes.first { $0.origin == .system && $0.isDefault }?.modeID
-            for candidate in [previous, fallback].compactMap({ $0 }) where candidate != modeID {
-                do {
-                    // Undo the session change only; the saved setting was never touched.
-                    try service.apply(modeID: candidate, to: displayID, scope: .session)
-                    return .reverted(to: candidate)
-                } catch {
-                    continue
-                }
-            }
-            throw ResoluteError.revertFailed(display: before?.name ?? "the display")
+            return .reverted(to: try restore(before: before, previous: previous, leaving: modeID, on: displayID))
         }
+    }
+
+    /// Switches back for the session only (the saved setting was never touched): to the
+    /// previous mode, else the default one. Returns the mode it restored.
+    private func restore(
+        before: Display?,
+        previous: Int32?,
+        leaving modeID: Int32,
+        on displayID: CGDirectDisplayID
+    ) throws -> Int32 {
+        let fallback = before?.modes.first { $0.origin == .system && $0.isDefault }?.modeID
+        for candidate in [previous, fallback].compactMap({ $0 }) where candidate != modeID {
+            do {
+                try service.apply(modeID: candidate, to: displayID, scope: .session)
+                return candidate
+            } catch {
+                continue
+            }
+        }
+        throw ResoluteError.revertFailed(display: before?.name ?? "the display")
     }
 
     /// Whether `displayID` reports `modeID` within half a second: a display may report a

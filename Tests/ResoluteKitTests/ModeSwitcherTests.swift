@@ -74,6 +74,30 @@ import Testing
         #expect(service.calls == [Call(modeID: 90, scope: .session), Call(modeID: 1, scope: .session)])
     }
 
+    /// CoreGraphics reports its own failures for listed modes, so a session trial of one is
+    /// not second-guessed; only hidden modes, switched through SkyLight, are checked.
+    @Test func leavesListedModesToCoreGraphics() throws {
+        let service = FakeDisplayService(display: TestData.fullHD(), ignoring: [2])
+        let outcome = try ModeSwitcher(service: service).apply(modeID: 2, to: 2, trial: true) { .keepForSession }
+        #expect(outcome == .keptForSession)
+        #expect(service.calls == [Call(modeID: 2, scope: .session)])
+    }
+
+    @Test func fallsBackToTheDefaultModeWhenANeverAppliedModeCannotBeUndone() {
+        let service = FakeDisplayService(display: TestData.fullHD(currentModeID: 2), refusing: [2], ignoring: [90])
+        #expect(throws: ResoluteError.modeNotApplied(display: "Full HD Monitor")) {
+            try ModeSwitcher(service: service).apply(modeID: 90, to: 2, trial: true) { .keep }
+        }
+        #expect(service.calls == [Call(modeID: 90, scope: .session), Call(modeID: 1, scope: .session)])
+    }
+
+    @Test func explainsWhenANeverAppliedModeLeavesNothingToRestore() {
+        let service = FakeDisplayService(display: TestData.fullHD(currentModeID: 2), refusing: [1, 2], ignoring: [90])
+        #expect(throws: ResoluteError.revertFailed(display: "Full HD Monitor")) {
+            try ModeSwitcher(service: service).apply(modeID: 90, to: 2, trial: true) { .keep }
+        }
+    }
+
     @Test func waitsForADisplayThatReportsTheNewModeLate() throws {
         let service = FakeDisplayService(display: TestData.fullHD(), staleSnapshotsAfterASwitch: 3)
         _ = service.displays()  // the snapshot taken before the switch is current
