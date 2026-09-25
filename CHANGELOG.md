@@ -6,7 +6,8 @@
 
 - Crashes on sizes, rates and scales no display has, such as `resolute set 9223372036854775807x2`, `@1e300` or `--scale inf`. Sizes up to 65535, rates from 1 Hz to 10 kHz and scales up to 8 are accepted.
 - Custom resolutions: adding a HiDPI entry and removing it again could delete a 1× entry the file already had, such as Apple's native 3456 × 2234 for the built-in panel. The list now shows every entry in the file.
-- A hidden mode the display refused still showed the Keep/Revert countdown. Resolute now checks that the display switched and says when it didn't.
+- A hidden mode the display refused still showed the Keep/Revert countdown. Resolute now gives the display half a second to switch, and if it doesn't, puts the previous mode back and says so.
+- `resolute set --allow-hidden --session` kept a hidden mode without asking. The prompt now runs for every hidden mode; `--session` only limits how long a confirmed one lasts.
 - Keeping a hidden mode in the terminal warned that macOS reported a different mode.
 - Waiting for the administrator password held a thread that other work needed.
 - Only osascript's own "User canceled. (-128)" counts as a cancelled password prompt.
