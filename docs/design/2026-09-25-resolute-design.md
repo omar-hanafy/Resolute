@@ -174,9 +174,10 @@ Makefile                     build / test / app / install / uninstall / clean
   8 bytes → standard (pixels); 16 bytes with bit 0 of word 2 → HiDPI (pixels, shown as
   points = pixels / 2, flags kept); anything else (12/9-byte, non-HiDPI 16-byte,
   non-data) → preserved verbatim, shown read-only. Every entry is listed and written
-  back exactly as listed: standard entries, then HiDPI entries, each sorted by width then
-  height, descending (a kept 12-byte entry sorts with the mode it names), then the other
-  preserved entries in their original order, so a file reads back the way it was saved. Adding a HiDPI entry also adds a standard entry at its pixel
+  back exactly as listed, in the file's order, so a file reads back the way it was saved
+  and a copy of Apple's file keeps Apple's order (see Revisions). A new entry goes where
+  it sorts when the list is in RDM's order (standard entries, then HiDPI entries, each
+  largest first), else at the end. Adding a HiDPI entry also adds a standard entry at its pixel
   size (RDM's pairing) unless one is listed; removing the HiDPI entry removes that
   partner only when the same edit added it, because a file cannot say why a standard
   entry is there (see Revisions). New HiDPI entries use flags `0x00000009 / 0x00A00000`
@@ -196,7 +197,9 @@ Makefile                     build / test / app / install / uninstall / clean
   from a dedicated thread; user cancel is not an error), or `ShellCommandRunner`
   (`/bin/sh`, used under `sudo` and by tests against a temp root). Every path is
   single-quote escaped. CLI edits hold a lock (`overrides.lock` beside the backups), so
-  overlapping commands keep each other's entries.
+  overlapping commands keep each other's entries; the app's scripts take the same lock
+  with `lockf`. Each change carries the state of the file it was based on, and the script
+  refuses to act if the file no longer matches.
 
 ### App
 
@@ -298,3 +301,35 @@ Commit messages describe the change only (no tool attribution).
   10 kHz, scales up to 8. Larger values overflowed later arithmetic and crashed.
 - **Command-line errors come before any change**: contradictory `set` options, a scale
   or rate given twice, and bad hex IDs are usage errors of the subcommand.
+
+### 0.3 (2026-09-25)
+
+- **Entries keep the file's order.** 167 of the 251 files macOS 27 ships that list
+  resolutions do not sort them the way RDM did, and nothing shows whether macOS cares, so
+  an edit no longer re-sorts a copy of Apple's file. New entries go where they sort when
+  the list is already sorted, else at the end. `ShippedOverrideTests` reads every file
+  macOS ships and checks that Resolute writes each one back unchanged.
+- **12-byte entries without the HiDPI bit are 1×.** macOS 27 ships 156 of them, all with
+  flags 2 and classic 1× sizes (640 × 480 to 1920 × 1200), for example in the files for
+  vendor 610, products b002 and b003. Two shipped files are lists of overrides chosen by
+  display properties; Resolute reports them as not editable.
+- **Case-sensitive volumes.** macOS looks for lowercase hexadecimal names, so an
+  override is listed only when that name resolves: "DisplayVendorID-DB4" counts on the
+  usual case-insensitive volume, and not on a case-sensitive one (checked on a
+  case-sensitive APFS disk image).
+- **Changes are based on what was read.** Every write carries the state of the file it
+  was based on (absent, or its bytes); the privileged script compares with `cmp` and
+  stops with status 3, reported as "changed after Resolute read it", before it backs up
+  or writes anything. The command line holds `overrides.lock` itself. The app runs as the
+  user and cannot create that file in `/Library/Application Support`, so its scripts take
+  the same flock(2) lock with `lockf(1)`. osascript reports every failed script as status
+  1; the script's own status and message are read from its report.
+- **Backups can be listed, restored and pruned.** Names stay in UTC so they sort by time
+  whatever the time zone; listings show local time. A restore writes the backup's bytes
+  as they are, and backs up what it replaces.
+- **JSON has every key.** A missing value is `null`, never an absent key
+  ([docs/json.md](../json.md)).
+- **Rates and scales are decimal numbers.** `Double(_:)` also read "0x3c" as 60.
+- **Identical elements.** A file with the same element twice lists it once: rows need
+  an identity, and none of Apple's 251 files repeats an element.
+
