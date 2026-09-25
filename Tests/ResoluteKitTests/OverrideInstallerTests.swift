@@ -498,6 +498,32 @@ actor EventLog {
         try draft.add(.standard(width: 2560, height: 1600))
     }
 
+    /// Removing the 1× entry a HiDPI entry renders at is worth a word; the HiDPI entries
+    /// Apple's file lists without one are not.
+    @Test func noticesHiDPIEntriesThisEditLeftWithoutTheirOneTimesEntry() throws {
+        let hiDPI = ScaleResolution.hiDPI(width: 1280, height: 720, flags: .standard)
+        let oneTimes = ScaleResolution.standard(width: 2560, height: 1440)
+        var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [oneTimes, hiDPI]))
+        #expect(draft.newlyUnpairedHiDPIEntries.isEmpty)
+        draft.remove([oneTimes])
+        #expect(draft.newlyUnpairedHiDPIEntries == [hiDPI])
+        draft.revert()
+        #expect(draft.newlyUnpairedHiDPIEntries.isEmpty)
+
+        let apples = ScaleResolution.preserved(.data(hexData("00000a00 00000640 00000001")))
+        var copy = OverrideDraft(DisplayOverride(key: key, resolutions: [apples]))
+        try copy.add(.standard(width: 1920, height: 1080))
+        #expect(copy.working.unpairedHiDPIEntries == [apples])
+        #expect(copy.newlyUnpairedHiDPIEntries.isEmpty)
+
+        var fresh = OverrideDraft(DisplayOverride(key: key))
+        try fresh.add(.hiDPI(width: 1600, height: 900, flags: .standard))
+        fresh.remove([.standard(width: 3200, height: 1800)])
+        #expect(fresh.newlyUnpairedHiDPIEntries == [.hiDPI(width: 1600, height: 900, flags: .standard)])
+        fresh.markSaved()
+        #expect(fresh.newlyUnpairedHiDPIEntries.isEmpty)
+    }
+
     @Test func removesTheGivenEntries() {
         var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [
             .standard(width: 1920, height: 1080), .standard(width: 2560, height: 1440), .standard(width: 3840, height: 2160),

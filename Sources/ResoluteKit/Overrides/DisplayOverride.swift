@@ -129,6 +129,16 @@ public struct DisplayOverride: Equatable, Sendable {
         )
     }
 
+    /// HiDPI entries without a 1× entry at their pixel size, which Resolute and RDM add with
+    /// each HiDPI entry. Apple's own files list some HiDPI entries without one.
+    public var unpairedHiDPIEntries: [ScaleResolution] {
+        resolutions.filter { entry in
+            guard case .hiDPI? = entry.describedMode, let pixels = entry.pixelSize else { return false }
+            let partner = ScaleResolution.standard(width: pixels.width, height: pixels.height)
+            return !resolutions.contains { $0.sameMode(as: partner) }
+        }
+    }
+
     /// The file contents, as an XML property list.
     public func propertyListData() throws -> Data {
         var dictionary = otherKeys.dictionary

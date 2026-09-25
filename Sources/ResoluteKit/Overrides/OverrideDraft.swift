@@ -16,6 +16,13 @@ public struct OverrideDraft: Equatable, Sendable {
 
     public var hasChanges: Bool { working != saved }
 
+    /// HiDPI entries that this edit left without their 1× entry, because it removed that
+    /// entry, or added the HiDPI entry and then removed its partner.
+    public var newlyUnpairedHiDPIEntries: [ScaleResolution] {
+        let before = Set(saved.unpairedHiDPIEntries)
+        return working.unpairedHiDPIEntries.filter { !before.contains($0) }
+    }
+
     /// Adds an entry after checking it is sensible and not already listed. A HiDPI entry is
     /// paired with a 1× entry at its pixel size, as RDM wrote them, unless the list has one.
     /// Returns the entries added besides `entry`. See `inserting(_:into:)` for where they go.
