@@ -45,6 +45,12 @@ enum Output {
         }.joined(separator: "\n")
     }
 
+    /// A folder's path without the trailing slash, to end a sentence with.
+    static func folder(_ url: URL) -> String {
+        let path = url.path(percentEncoded: false)
+        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+    }
+
     /// "2026-09-25 14:03:12", in this Mac's time zone.
     static func localTime(_ date: Date) -> String {
         let formatter = DateFormatter()

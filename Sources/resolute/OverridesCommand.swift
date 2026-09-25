@@ -166,7 +166,7 @@ struct ListOverrides: ParsableCommand, ContextCommand {
             return
         }
         guard !summaries.isEmpty else {
-            context.write("No overrides in \(store.locations.userRoot.path(percentEncoded: false))")
+            context.write("No overrides in \(Output.folder(store.locations.userRoot)).")
             return
         }
         summaries.forEach { context.write($0.text) }
@@ -358,8 +358,8 @@ struct ResetOverride: AsyncParsableCommand, ContextCommand {
             context.write(Self.nothingToRemove(for: target))
             return
         }
-        let folder = installer.locations.backupFolder(for: target.key).path(percentEncoded: false)
-        context.write("Removed the override for \(target). A backup is in \(folder)")
+        let folder = Output.folder(installer.locations.backupFolder(for: target.key))
+        context.write("Removed the override for \(target). A backup is in \(folder).")
         context.write("To undo it: " + location.command("overrides restore 1\(self.target.arguments)", isRoot: context.isRoot))
         context.write(OverridesCommand.reconnectHint)
     }
@@ -393,9 +393,9 @@ struct ListBackups: ParsableCommand, ContextCommand {
             context.write(try Output.json(summaries))
             return
         }
-        let folder = store.locations.backupFolder(for: target.key).path(percentEncoded: false)
+        let folder = Output.folder(store.locations.backupFolder(for: target.key))
         guard !summaries.isEmpty else {
-            context.write("There are no backups of \(target) in \(folder)")
+            context.write("There are no backups of \(target) in \(folder).")
             return
         }
         context.write("Backups of \(target), newest first, in \(folder):")
@@ -506,7 +506,7 @@ struct PruneBackups: AsyncParsableCommand, ContextCommand {
             : [try target.target(in: context)]
         // Nothing to remove needs no administrator rights, so check before asking for them.
         guard targets.contains(where: { store.backups(for: $0.key).count > keep }) else {
-            if targets.isEmpty { context.write("There are no backups in \(store.locations.backupRoot.path(percentEncoded: false))") }
+            if targets.isEmpty { context.write("There are no backups in \(Output.folder(store.locations.backupRoot)).") }
             targets.forEach { context.write(nothingToRemove(for: $0, count: store.backups(for: $0.key).count)) }
             return
         }
