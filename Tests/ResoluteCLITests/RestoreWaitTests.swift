@@ -9,6 +9,7 @@ import Testing
 @Suite struct RestoreWaitTests {
     let arguments = ["set", "--mode-id", "90", "--allow-hidden", "-d", "dell"]
     let waiting = "DELL P2419H went away. Waiting for it to come back to restore the previous mode…"
+    let wayBack = "To put the previous mode back later: resolute set --mode-id 1 -d id:2 --session"
 
     /// Runs `arguments` as the command line would against `service`, answering the prompt
     /// with `answer` and waiting at most a fifth of a second for a display to come back.
@@ -58,11 +59,12 @@ import Testing
             return .revert
         }
         #expect(result.code == 1)
+        // `set --default` would save the default mode over the one the person had.
         #expect(result.message == """
             Error: DELL P2419H did not come back in time, so its previous mode was not restored. \
-            The previous mode comes back when you log out, or run `resolute set --default` once the display is back.
+            Logging out brings back the mode macOS saved for it.
             """)
-        #expect(result.transcript.errors == waiting)
+        #expect(result.transcript.errors == waiting + "\n" + wayBack)
         #expect(base.changes == [.init(displayID: 2, modeID: 90, scope: .session)])
     }
 
@@ -99,8 +101,34 @@ import Testing
         #expect(result.code == 1)
         #expect(result.message == """
             Error: The previous mode of DELL P2419H could not be restored. \
-            It comes back when you log out, or run `resolute set --default`.
+            Logging out brings back the mode macOS saved for it.
             """)
+        #expect(result.transcript.errors == waiting + "\n" + wayBack)
+    }
+
+    /// The answer is about the mode on trial, so a display showing another one by then is
+    /// neither saved over nor switched back.
+    @Test func keepsNothingWhenTheDisplayShowsAnotherModeAtTheAnswer() async {
+        let (base, service) = monitor()
+        let result = await run(arguments, on: service) {
+            service.disconnect(forSnapshots: 0, returningIn: 1)
+            return .keep
+        }
+        #expect(result.code == 1)
+        #expect(result.message
+            == "Error: DELL P2419H was showing another mode when you answered, so the mode on trial was not kept.")
+        #expect(base.changes == [.init(displayID: 2, modeID: 90, scope: .session)])
+    }
+
+    @Test func leavesAModeChosenElsewhereDuringThePromptAlone() async {
+        let (base, service) = monitor()
+        let result = await run(arguments, on: service) {
+            service.disconnect(forSnapshots: 0, returningIn: 3)
+            return .revert
+        }
+        #expect(result.code == 0)
+        #expect(result.transcript.output == "DELL P2419H was showing 1280 × 720 @ 60 Hz, mode 3, when you answered, so it was left as it is.")
+        #expect(base.changes == [.init(displayID: 2, modeID: 90, scope: .session)])
     }
 
     /// A refusal says nothing once the display has gone away again.

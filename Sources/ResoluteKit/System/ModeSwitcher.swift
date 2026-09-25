@@ -28,6 +28,9 @@ public struct ModeSwitcher: Sendable {
         /// The display went away before the previous mode could be put back. Finish the
         /// restore with `finish(_:)` once the display is back.
         case restorePending(PendingRestore)
+        /// The display showed another mode than the one on trial when the answer came, so
+        /// nothing was undone.
+        case leftAlone(current: Int32)
     }
 
     /// A revert that waits for its display. A display that cannot show a mode may lose its
@@ -91,7 +94,8 @@ public struct ModeSwitcher: Sendable {
     /// Switches `displayID` to `modeID`. For a trial, `decide` is asked, after the switch,
     /// whether to keep the mode. When the display goes away before a trial can be undone,
     /// the outcome is `restorePending`; before a kept mode is saved, `displayWentAway` is
-    /// thrown.
+    /// thrown. The answer is about the mode on trial: a display showing another mode by
+    /// then, because it came back in one or was switched elsewhere, keeps what it shows.
     public func apply(
         modeID: Int32,
         to displayID: CGDirectDisplayID,
@@ -118,7 +122,8 @@ public struct ModeSwitcher: Sendable {
         // SkyLight reports no errors, so check that a hidden mode really took before asking
         // whether to keep it; CoreGraphics reports its own failures for listed modes.
         let isListed = before?.modes.first { $0.modeID == modeID }?.origin == .system
-        if !isListed || verifiesListedModes {
+        let checksShownMode = !isListed || verifiesListedModes
+        if checksShownMode {
             guard waitUntilCurrent(modeID, on: displayID) else {
                 Self.log.error("\(name, privacy: .public) did not report mode \(modeID) within half a second")
                 let notShown = ResoluteError.modeNotApplied(display: before?.name ?? "The display")
@@ -131,8 +136,21 @@ public struct ModeSwitcher: Sendable {
             Self.log.info("\(name, privacy: .public) reports mode \(modeID); asking whether to keep it")
         }
 
-        switch decide() {
-        case .keep:
+        let decision = decide()
+        // A mode seen on the display before asking is looked for again at the answer.
+        let answeredOn = checksShownMode ? service.displays().first { $0.id == displayID } : nil
+        switch decision {
+        case .keep, .keepForSession:
+            // Saving the mode on trial over another one would switch the display back to
+            // what may have made it drop off.
+            if let answeredOn, (answeredOn.currentModeID ?? service.currentModeID(of: displayID)) != modeID {
+                Self.log.error("\(name, privacy: .public) no longer showed mode \(modeID) at the answer, so it was not kept")
+                throw ResoluteError.displayChangedDuringTrial(display: name)
+            }
+            guard decision == .keep else {
+                Self.log.notice("Kept mode \(modeID) on \(name, privacy: .public) until logout")
+                return .keptForSession
+            }
             do {
                 try service.apply(modeID: modeID, to: displayID, scope: .permanent)
             } catch where !isOnline(displayID) {
@@ -141,10 +159,11 @@ public struct ModeSwitcher: Sendable {
             }
             Self.log.notice("Kept mode \(modeID) on \(name, privacy: .public)")
             return .kept
-        case .keepForSession:
-            Self.log.notice("Kept mode \(modeID) on \(name, privacy: .public) until logout")
-            return .keptForSession
         case .revert:
+            if let answeredOn, let current = Self.otherModeShown(by: answeredOn, than: modeID) {
+                Self.log.notice("\(name, privacy: .public) showed mode \(current) at the answer, not the mode on trial, so it is left as it is")
+                return .leftAlone(current: current)
+            }
             return try revert(restore(nil), name: name)
         }
     }

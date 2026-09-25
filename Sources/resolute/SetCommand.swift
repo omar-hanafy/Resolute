@@ -141,6 +141,9 @@ struct SetCommand: ParsableCommand, ContextCommand {
         case .reverted(let modeID):
             let restored = display.modes.first { $0.modeID == modeID }
             context.write("Kept the previous mode: \(restored.map(Output.describe) ?? "mode \(modeID)").")
+        case .leftAlone(let current):
+            let shown = display.modes.first { $0.modeID == current }
+            context.write("\(display.name) was showing \(shown.map(Output.describe) ?? "mode \(current)"), when you answered, so it was left as it is.")
         case .restorePending(let pending):
             try Self.finishRestore(pending, with: switcher, on: display, in: context)
         }
@@ -171,6 +174,7 @@ struct SetCommand: ParsableCommand, ContextCommand {
             guard progress == .waiting else { break }
             guard ContinuousClock.now < deadline else {
                 switcher.giveUp(on: pending, after: .seconds(context.restoreTimeout))
+                context.writeError(Self.wayBack(pending, on: display))
                 throw lastError ?? ResoluteError.displayDidNotReturn(display: pending.displayName)
             }
             Thread.sleep(forTimeInterval: context.restorePollInterval)
@@ -191,6 +195,13 @@ struct SetCommand: ParsableCommand, ContextCommand {
         case .waiting:
             break
         }
+    }
+
+    /// The command that puts `pending`'s mode back for the session, as the revert would have.
+    static func wayBack(_ pending: ModeSwitcher.PendingRestore, on display: Display) -> String {
+        let isHidden = display.modes.first { $0.modeID == pending.modeID }?.origin == .hidden
+        return "To put the previous mode back later: resolute set --mode-id \(pending.modeID) -d id:\(pending.displayID) --session"
+            + (isHidden ? " --allow-hidden" : "")
     }
 
     /// Asks in the terminal whether to keep a hidden mode. Without a terminal the mode

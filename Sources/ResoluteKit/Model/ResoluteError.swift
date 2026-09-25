@@ -31,6 +31,8 @@ public enum ResoluteError: Error, Equatable, Sendable {
     case displayWentAway(display: String)
     /// A display went away during a trial and did not come back in time to be reverted.
     case displayDidNotReturn(display: String)
+    /// The display showed another mode than the one on trial when the person answered.
+    case displayChangedDuringTrial(display: String)
 }
 
 extension ResoluteError: LocalizedError {
@@ -51,7 +53,7 @@ extension ResoluteError: LocalizedError {
         case .hiddenModeNeedsConfirmation(let query):
             "\(query) is a hidden mode that macOS does not list. Pass --allow-hidden to use it."
         case .revertFailed(let display):
-            "The previous mode of \(display) could not be restored. It comes back when you log out, or run `resolute set --default`."
+            "The previous mode of \(display) could not be restored. Logging out brings back the mode macOS saved for it."
         case .modeNotApplied(let display):
             "\(display) did not switch to that mode, so it was left as it was. The display may not support the mode."
         case .currentModeUnknown(let display):
@@ -87,7 +89,9 @@ extension ResoluteError: LocalizedError {
         case .displayWentAway(let display):
             "\(display) went away before the new mode could be saved, so it was not saved. If the display comes back in that mode, it lasts until you log out."
         case .displayDidNotReturn(let display):
-            "\(display) did not come back in time, so its previous mode was not restored. The previous mode comes back when you log out, or run `resolute set --default` once the display is back."
+            "\(display) did not come back in time, so its previous mode was not restored. Logging out brings back the mode macOS saved for it."
+        case .displayChangedDuringTrial(let display):
+            "\(display) was showing another mode when you answered, so the mode on trial was not kept."
         }
     }
 }

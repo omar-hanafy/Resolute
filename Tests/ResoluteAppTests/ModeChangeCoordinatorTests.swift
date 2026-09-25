@@ -253,6 +253,43 @@ final class TestClock {
         #expect(coordinator.pendingRestores.isEmpty)
     }
 
+    /// A display that has only just come back may refuse a mode for a moment and then
+    /// change nothing more, so a refused revert is tried again soon without waiting for
+    /// another screen change.
+    @Test func triesARefusedRestoreAgainSoonWithoutAnotherScreenChange() async throws {
+        let (countdown, clock) = (countdown, clock)
+        let coordinator = ModeChangeCoordinator(
+            service: displays, decide: { countdown.answer() }, report: { _ in }, now: { clock.now },
+            retryInterval: .milliseconds(10)
+        )
+        let displays = displays
+        countdown.answers.append {
+            displays.goAway(2)
+            return .revert
+        }
+        coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
+        displays.refused = [1]
+        displays.comeBack(2)
+        coordinator.displaysDidChange()
+        #expect(coordinator.pendingRestores == [pending])
+        displays.refused = []
+        for _ in 0..<100 where !coordinator.pendingRestores.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(coordinator.pendingRestores.isEmpty)
+        #expect(displays.changes.last == Change(displayID: 2, modeID: 1, scope: .session))
+    }
+
+    /// Choosing the mode on trial again, while its display refuses the previous one, is
+    /// no answer to the countdown: the revert keeps waiting.
+    @Test func keepsAWaitingRestoreWhenTheModeOnTrialIsChosenAgain() {
+        tryModeThatMakesTheMonitorGoAway()
+        displays.refused = [1]
+        displays.comeBack(2)
+        coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
+        #expect(coordinator.pendingRestores == [pending])
+    }
+
     @Test func restoresOnALaterChangeOnceTheDisplayTakesTheMode() {
         tryModeThatMakesTheMonitorGoAway()
         displays.refused = [1]
@@ -309,9 +346,10 @@ final class TestClock {
         ])
     }
 
-    /// A switch chosen while another display's countdown is up leaves the waiting revert
-    /// alone, since trying it could open an alert over the countdown.
-    @Test func leavesAWaitingRestoreAloneDuringAnotherCountdown() {
+    /// A mode chosen while a countdown is up is ignored, with the revert waiting for its
+    /// display: either could open an alert or a second countdown over the first, whose
+    /// timer would then end the wrong one.
+    @Test func ignoresModesChosenWhileACountdownIsUp() {
         displays.dropMonitor(whenSwitchedTo: 90)
         coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
         displays.comeBack(2)
@@ -325,6 +363,7 @@ final class TestClock {
         coordinator.apply(modeID: 91, to: 1, needsConfirmation: true)
         #expect(seenDuringCountdown == [])
         #expect(!displays.changes.contains(Change(displayID: 2, modeID: 1, scope: .session)))
+        #expect(!displays.changes.contains(Change(displayID: 2, modeID: 3, scope: .permanent)))
     }
 
     /// The countdown's timer ends the innermost modal alert, so no other alert may open

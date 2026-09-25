@@ -25,12 +25,15 @@ final class ModeChangeCoordinator {
     private let report: @MainActor (any Error) -> Void
     private let now: @MainActor () -> ContinuousClock.Instant
     private let restoreTimeout: Duration
+    private let retryInterval: Duration
     private var waiting: [CGDirectDisplayID: Waiting] = [:]
     /// Switches under way. During one the Keep/Revert countdown may be up, and its timer
     /// ends the innermost modal alert, so no other alert may open: screen changes are taken
     /// up once the switch is over.
     private var switchesUnderWay = 0
     private var hasMissedChanges = false
+    /// Displays whose refused revert is due another try.
+    private var retrying: Set<CGDirectDisplayID> = []
 
     /// `decide` shows the Keep/Revert countdown and `report` an alert; tests pass their own,
     /// with their own clock.
@@ -43,13 +46,15 @@ final class ModeChangeCoordinator {
             Alerts.show($0, title: "The display mode could not be changed")
         },
         now: @escaping @MainActor () -> ContinuousClock.Instant = { .now },
-        restoreTimeout: Duration = .seconds(120)
+        restoreTimeout: Duration = .seconds(120),
+        retryInterval: Duration = .seconds(1)
     ) {
         self.service = service
         self.decide = decide
         self.report = report
         self.now = now
         self.restoreTimeout = restoreTimeout
+        self.retryInterval = retryInterval
     }
 
     /// The reverts waiting for their display.
@@ -58,10 +63,16 @@ final class ModeChangeCoordinator {
     }
 
     func apply(modeID: Int32, to displayID: CGDirectDisplayID, needsConfirmation: Bool) {
+        // The countdown's timer ends the innermost modal alert, so a switch chosen while it
+        // is up, with its own alert or countdown, would leave the first one on screen with
+        // no revert.
+        guard switchesUnderWay == 0 else {
+            ResoluteLog.modes.notice("Ignored mode \(modeID) for display \(displayID), chosen while a countdown was up")
+            return
+        }
         // A revert still waiting for this display goes first, so the new switch starts from
-        // the mode the person had rather than from the one on trial. Not while another
-        // switch is under way, where it could open an alert over that countdown.
-        if switchesUnderWay == 0, waiting[displayID] != nil { attempt(displayID) }
+        // the mode the person had rather than from the one on trial.
+        if waiting[displayID] != nil { attempt(displayID) }
         switchesUnderWay += 1
         let result = Result {
             try ModeSwitcher(service: service).apply(modeID: modeID, to: displayID, trial: needsConfirmation) {
@@ -85,9 +96,10 @@ final class ModeChangeCoordinator {
     private func settle(_ outcome: ModeSwitcher.Outcome, of displayID: CGDirectDisplayID) {
         let earlier = waiting.removeValue(forKey: displayID)
         switch outcome {
-        case .reverted:
+        case .reverted, .leftAlone, .alreadyCurrent:
             // Undoing the new trial took the display back to where it was, which can be the
-            // earlier trial a refusing display is still in, so that revert keeps waiting.
+            // earlier trial a refusing display is still in, so that revert keeps waiting. So
+            // does choosing the mode on trial again, which answers no countdown.
             if let earlier { waiting[displayID] = earlier }
         case .restorePending(let restore):
             // Undoing both trials means going back to the mode from before the first one.
@@ -98,7 +110,7 @@ final class ModeChangeCoordinator {
                     trialModeID: restore.trialModeID, failure: restore.failure
                 )
             } ?? restore)
-        case .alreadyCurrent, .applied, .kept, .keptForSession:
+        case .applied, .kept, .keptForSession:
             // The person's new choice replaces the earlier revert.
             if let earlier {
                 ResoluteLog.modes.notice("""
@@ -155,11 +167,32 @@ final class ModeChangeCoordinator {
         }
         guard now() >= entry.deadline else {
             waiting[displayID] = entry
+            if failure != nil { retrySoon(displayID) }
             return
         }
         switcher.giveUp(on: entry.restore, after: restoreTimeout)
         // A display that is back but refuses is shown; one that stayed away is only logged.
         if let failure { report(failure) }
+    }
+
+    /// A display that has only just come back may refuse a mode for a moment and then
+    /// change nothing more, so a refused revert is tried again after `retryInterval`, as
+    /// `resolute set` does.
+    private func retrySoon(_ displayID: CGDirectDisplayID) {
+        guard retrying.insert(displayID).inserted else { return }
+        Task { [weak self, retryInterval] in
+            try? await Task.sleep(for: retryInterval)
+            self?.retry(displayID)
+        }
+    }
+
+    private func retry(_ displayID: CGDirectDisplayID) {
+        retrying.remove(displayID)
+        guard switchesUnderWay == 0 else {
+            hasMissedChanges = true
+            return
+        }
+        if waiting[displayID] != nil { attempt(displayID) }
     }
 
     private func wait(for restore: ModeSwitcher.PendingRestore) {

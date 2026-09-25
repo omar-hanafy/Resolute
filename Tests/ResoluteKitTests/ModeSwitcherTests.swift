@@ -271,6 +271,31 @@ import Testing
         #expect(base.calls == [Call(modeID: 90, scope: .session)])
     }
 
+    /// The answer is about the mode on trial. A display that came back in another mode
+    /// during the countdown, or was switched elsewhere, keeps what it shows: saving the
+    /// mode on trial would switch it back to what may have made it drop off.
+    @Test(arguments: [ModeSwitcher.Decision.keep, .keepForSession])
+    func keepsNothingWhenTheDisplayShowsAnotherModeAtTheAnswer(decision: ModeSwitcher.Decision) throws {
+        let switcher = ModeSwitcher(service: service)
+        #expect(throws: ResoluteError.displayChangedDuringTrial(display: "Full HD Monitor")) {
+            try switcher.apply(modeID: 90, to: 2, trial: true) {
+                service.reconnect(showing: 2)
+                return decision
+            }
+        }
+        #expect(base.calls == [Call(modeID: 90, scope: .session)])
+    }
+
+    /// Nor is a mode chosen elsewhere during the countdown undone.
+    @Test func revertsNothingWhenTheDisplayShowsAnotherModeAtTheAnswer() throws {
+        let outcome = try ModeSwitcher(service: service).apply(modeID: 90, to: 2, trial: true) {
+            service.reconnect(showing: 3)
+            return .revert
+        }
+        #expect(outcome == .leftAlone(current: 3))
+        #expect(base.calls == [Call(modeID: 90, scope: .session)])
+    }
+
     @Test func revertsStraightAwayWhenTheDisplayStays() throws {
         let outcome = try ModeSwitcher(service: service).apply(modeID: 90, to: 2, trial: true) { .revert }
         #expect(outcome == .reverted(to: 2))
