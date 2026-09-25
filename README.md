@@ -8,7 +8,7 @@ Resolute is a ground-up successor to [RDM](https://github.com/avibrazil/RDM). On
 
 - **Every mode in one menu.** HiDPI ("looks like") resolutions, low-resolution 1× modes such as your panel's full native resolution, and, while you hold ⌥, modes macOS lists nowhere.
 - **Refresh rates.** Switch between 120, 60, 59.94, 50, 48 and 47.95 Hz, or whatever your display offers, without changing the resolution.
-- **Safe hidden modes.** A hidden mode is tried for the current session and reverts after 15 seconds unless you choose Keep (in the menu) or type `y` (in the terminal), so a mode your display cannot show undoes itself.
+- **Safe hidden modes.** A hidden mode is tried for the current session and reverts after 15 seconds unless you choose Keep (in the menu) or type `y` (in the terminal, where Ctrl-C reverts too), so a mode your display cannot show undoes itself.
 - **Mirroring** on or off with one click.
 - **Custom HiDPI resolutions** through display override files, like RDM's editor, with backups you can restore.
 - **A command-line tool,** `resolute`, for scripts and shortcuts, with [JSON output](docs/json.md) and a `resolute doctor` report for bug reports.

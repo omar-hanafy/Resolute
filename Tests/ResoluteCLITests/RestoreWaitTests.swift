@@ -16,11 +16,13 @@ import Testing
     func run(
         _ arguments: [String],
         on service: ReconnectingDisplays,
+        interrupts: Interrupts = Interrupts(),
         answering answer: @escaping @Sendable () -> ModeSwitcher.Decision
     ) async -> (transcript: Transcript, message: String?, code: Int32) {
         let transcript = Transcript()
         var context = transcript.context(service: service, isRoot: false, decision: .revert)
         context.confirmHiddenMode = answer
+        context.interrupts = interrupts
         context.restoreTimeout = 0.2
         context.restorePollInterval = 0.001
         let result = await ResoluteCommand.execute(arguments, in: context)
@@ -161,6 +163,8 @@ import Testing
         #expect(result.code == 1)
         #expect(result.message
             == "Error: DELL P2419H did not switch to that mode, so it was left as it was. The display may not support the mode.")
+        // How the wait ended comes first, as it does when the mode showed.
+        #expect(result.transcript.output == "DELL P2419H is back. Restored the previous mode: 1920 × 1080 @ 60 Hz, mode 1.")
         #expect(result.transcript.errors == waiting)
         #expect(base.changes == [
             .init(displayID: 2, modeID: 90, scope: .session), .init(displayID: 2, modeID: 1, scope: .session),
@@ -192,6 +196,35 @@ import Testing
         #expect(result.code == 0)
         #expect(result.transcript.errors == "warning: DELL P2419H went away, so its new mode could not be checked.")
         #expect(base.changes == [.init(displayID: 2, modeID: 90, scope: .session)])
+    }
+
+    /// Ctrl-C ends the wait, after one last look, with the way back.
+    @Test func stopsWaitingAtControlCAndSaysHowToPutThePreviousModeBack() async {
+        let (base, service) = monitor()
+        let interrupts = Interrupts()
+        let result = await run(arguments, on: service, interrupts: interrupts) {
+            service.disconnect()
+            interrupts.interrupt()
+            return .revert
+        }
+        #expect(result.code == 1)
+        #expect(result.message == "Error: The operation was cancelled.")
+        #expect(result.transcript.errors == waiting + "\n" + wayBack)
+        #expect(base.changes == [.init(displayID: 2, modeID: 90, scope: .session)])
+    }
+
+    /// A display back by the time Ctrl-C comes still gets its mode back.
+    @Test func putsThePreviousModeBackWhenTheDisplayIsBackAtControlC() async {
+        let (base, service) = monitor()
+        let interrupts = Interrupts()
+        let result = await run(arguments, on: service, interrupts: interrupts) {
+            service.disconnect(forSnapshots: 2)
+            interrupts.interrupt()
+            return .revert
+        }
+        #expect(result.code == 0)
+        #expect(result.transcript.output == "DELL P2419H is back. Restored the previous mode: 1920 × 1080 @ 60 Hz, mode 1.")
+        #expect(base.changes.last == .init(displayID: 2, modeID: 1, scope: .session))
     }
 
     @Test func revertsStraightAwayWhileTheDisplayStays() async {
@@ -310,5 +343,36 @@ final class ReconnectingDisplays: DisplayControlling, @unchecked Sendable {
 
     func setMirroring(_ enabled: Bool) throws {
         try base.setMirroring(enabled)
+    }
+}
+
+/// Ctrl-C while a hidden mode is on trial is caught, since ending the process would leave
+/// the mode until logout.
+@Suite(.serialized) struct ControlCTests {
+    /// The prompt takes Ctrl-C for "no", at once, so the trial is undone.
+    @Test func answersThePromptWithRevert() async throws {
+        var ends: [Int32] = [-1, -1]
+        try #require(pipe(&ends) == 0)
+        defer { ends.forEach { close($0) } }
+        let interrupts = Interrupts()
+        let input = ends[0]
+        let start = ContinuousClock.now
+        async let decision = Task.detached {
+            SetCommand.askToKeep(seconds: 5, input: input, isTerminal: true, interrupts: interrupts)
+        }.value
+        try await Task.sleep(for: .milliseconds(50))
+        interrupts.interrupt()
+        #expect(await decision == .revert)
+        #expect(ContinuousClock.now - start < .seconds(2))
+    }
+
+    /// The real Ctrl-C reaches the pipe while it is caught. Like the terminal's, the signal
+    /// goes to the process, and whichever thread takes it runs the handler.
+    @Test func catchesTheSignalWhileATrialIsUnderWay() {
+        let caught = Interrupts.process.catchingControlC { () -> Interrupts.Event in
+            kill(getpid(), SIGINT)
+            return Interrupts.process.wait(2)
+        }
+        #expect(caught == .interrupted)
     }
 }

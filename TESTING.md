@@ -34,7 +34,7 @@ The automated tests can't see the screen, so these checks need a person, and som
 - [ ] Doing nothing, pressing Return or pressing Escape brings the previous mode back. Keep keeps the new mode.
 - [ ] A mode the display can't show comes back by itself when the countdown ends.
 - [ ] A display that drops off during the countdown and reconnects comes back in its previous mode, with no alert while it is away. The app waits up to two minutes for it; `resolute set` says it is waiting and gives up after 30 seconds.
-- [ ] `resolute modes --all --raw` lists the hidden modes. `resolute set --mode-id <id> --allow-hidden` asks in the terminal: `y` keeps the mode, anything else or 15 seconds reverts it.
+- [ ] `resolute modes --all --raw` lists the hidden modes. `resolute set --mode-id <id> --allow-hidden` asks in the terminal: `y` keeps the mode; anything else, Ctrl-C or 15 seconds reverts it.
 - [ ] After Keep, log out and back in. Note whether the hidden mode is still in use: macOS saves modes by size and refresh rate, and may not bring back one it does not list.
 
 ### Custom resolutions (an external display; Apple silicon may ignore scaled ones)

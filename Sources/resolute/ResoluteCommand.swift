@@ -146,6 +146,8 @@ struct CommandContext: Sendable {
     /// how often it looks, in seconds.
     var restoreTimeout: TimeInterval = 30
     var restorePollInterval: TimeInterval = 0.5
+    /// Ctrl-C during a trial; `live` catches the real one.
+    var interrupts = Interrupts()
 
     static var live: CommandContext {
         CommandContext(
@@ -153,7 +155,8 @@ struct CommandContext: Sendable {
             write: { print($0) },
             writeError: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) },
             confirmHiddenMode: { SetCommand.askToKeep() },
-            isRoot: geteuid() == 0
+            isRoot: geteuid() == 0,
+            interrupts: .process
         )
     }
 }

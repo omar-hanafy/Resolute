@@ -119,11 +119,23 @@ struct SetCommand: ParsableCommand, ContextCommand {
         // only limits how long a confirmed mode lasts.
         let trial = session || mode.origin == .hidden
         let switcher = ModeSwitcher(service: service)
-        let outcome = try switcher.apply(modeID: mode.modeID, to: display.id, trial: trial) {
-            guard mode.origin == .hidden else { return .keepForSession }
-            let decision = context.confirmHiddenMode()
-            return session && decision == .keep ? .keepForSession : decision
+        // Until the trial is over, Ctrl-C answers it rather than leaving the mode in place.
+        try context.interrupts.catchingControlC {
+            let outcome = try switcher.apply(modeID: mode.modeID, to: display.id, trial: trial) {
+                guard mode.origin == .hidden else { return .keepForSession }
+                let decision = context.confirmHiddenMode()
+                return session && decision == .keep ? .keepForSession : decision
+            }
+            try report(outcome, of: mode, on: display, with: switcher, in: context)
         }
+    }
+
+    /// Says how the switch ended, waiting first for a display that went away mid-trial.
+    private func report(
+        _ outcome: ModeSwitcher.Outcome, of mode: DisplayMode, on display: Display, with switcher: ModeSwitcher,
+        in context: CommandContext
+    ) throws {
+        let service = context.service
         switch outcome {
         case .alreadyCurrent:
             context.write("\(display.name) is already at \(Output.describe(mode)).")
@@ -177,10 +189,17 @@ struct SetCommand: ParsableCommand, ContextCommand {
                 context.writeError(Self.wayBack(pending, on: display))
                 throw lastError ?? ResoluteError.displayDidNotReturn(display: pending.displayName)
             }
-            Thread.sleep(forTimeInterval: context.restorePollInterval)
+            guard context.interrupts.wait(context.restorePollInterval) != .interrupted else {
+                // Stopped with Ctrl-C: one last look, then the way back.
+                if let last = try? switcher.finish(pending, logsFailures: !hasFailed), last != .waiting {
+                    progress = last
+                    break
+                }
+                ResoluteLog.modes.notice("Stopped waiting for \(pending.displayName, privacy: .public): interrupted")
+                context.writeError(Self.wayBack(pending, on: display))
+                throw ResoluteError.cancelled
+            }
         }
-        // A mode that never showed is an error whether or not the display went away.
-        if let failure = pending.failure { throw failure }
         func describe(_ modeID: Int32) -> String {
             display.modes.first { $0.modeID == modeID }.map(Output.describe) ?? "mode \(modeID)"
         }
@@ -195,6 +214,9 @@ struct SetCommand: ParsableCommand, ContextCommand {
         case .waiting:
             break
         }
+        // A mode that never showed is an error whether or not the display went away, once
+        // the display's state is told.
+        if let failure = pending.failure { throw failure }
     }
 
     /// The command that puts `pending`'s mode back for the session, as the revert would have.
@@ -206,15 +228,17 @@ struct SetCommand: ParsableCommand, ContextCommand {
 
     /// Asks in the terminal whether to keep a hidden mode. Without a terminal the mode
     /// stays until the user logs out.
-    static func askToKeep(seconds: Int = 15) -> ModeSwitcher.Decision {
-        guard isatty(STDIN_FILENO) != 0 else {
+    static func askToKeep(
+        seconds: Int = 15, input: Int32 = STDIN_FILENO, isTerminal: Bool? = nil, interrupts: Interrupts = .process
+    ) -> ModeSwitcher.Decision {
+        guard isTerminal ?? (isatty(input) != 0) else {
             FileHandle.standardError.write(Data("note: no terminal to confirm in, so this mode lasts until you log out.\n".utf8))
             return .keepForSession
         }
         let prompt = "Keep this display mode? Type y and press Return within \(seconds) seconds; anything else reverts: "
         FileHandle.standardOutput.write(Data(prompt.utf8))
-        var input = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
-        guard poll(&input, 1, Int32(seconds * 1_000)) > 0, let answer = readLine() else {
+        // Ctrl-C is "no": the trial must be undone, which ending the process would not do.
+        guard interrupts.wait(TimeInterval(seconds), orFor: input) == .input, let answer = readLine() else {
             print("")
             return .revert
         }
