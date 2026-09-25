@@ -66,12 +66,12 @@ final class CustomResolutionsModel {
 
     @ObservationIgnored private let service: any DisplayControlling
     @ObservationIgnored let store: OverrideStore
-    @ObservationIgnored private let installer: OverrideInstaller
+    @ObservationIgnored let installer: OverrideInstaller
 
     init(
         service: any DisplayControlling,
         store: OverrideStore = OverrideStore(),
-        installer: OverrideInstaller = OverrideInstaller(runner: AdminCommandRunner())
+        installer: OverrideInstaller = .privileged
     ) {
         self.service = service
         self.store = store
@@ -282,5 +282,14 @@ final class CustomResolutionsModel {
     func revealInFinder() {
         guard let selection, source == .installed else { return }
         NSWorkspace.shared.activateFileViewerSelecting([store.locations.userFile(for: selection)])
+    }
+}
+
+extension OverrideInstaller {
+    /// The app's installer: scripts run as root after the password prompt. They take the
+    /// command line's lock themselves, because the app runs as the user and cannot create
+    /// the lock file, so a save never interleaves with `sudo resolute overrides add`.
+    static var privileged: OverrideInstaller {
+        OverrideInstaller(runner: AdminCommandRunner(), scriptLock: OverrideLocations.standard.lockFile)
     }
 }

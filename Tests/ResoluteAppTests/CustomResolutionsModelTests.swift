@@ -83,6 +83,18 @@ struct GatedRunner: CommandRunning {
     let hd = ScaleResolution.hiDPI(width: 1920, height: 1080, flags: .standard)
     let qhd = ScaleResolution.hiDPI(width: 2560, height: 1440, flags: .standard)
 
+    /// The app runs as the user and cannot create the command line's lock file, so its
+    /// privileged scripts take that lock themselves, or a save could interleave with
+    /// `sudo resolute overrides add`. Nothing here runs a script.
+    @Test func privilegedScriptsTakeTheCommandLinesLock() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = CustomResolutionsModel(service: StubDisplays([first]), store: OverrideStore(locations: .staged(at: root)))
+        #expect(model.installer.runner is AdminCommandRunner)
+        #expect(model.installer.locations == .standard)
+        #expect(model.installer.scriptLock == OverrideLocations.standard.lockFile)
+    }
+
     @Test func switchesFreelyWithoutChanges() throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
