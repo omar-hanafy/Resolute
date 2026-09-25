@@ -78,6 +78,10 @@ public struct ModeQuery: Hashable, Sendable {
             }
             return mode
         }
+        if width == nil, height == nil, !useDefault, display.currentMode == nil {
+            // Only a refresh rate or scale was given, but there is no current size to keep.
+            throw ResoluteError.currentModeUnknown(display: display.name)
+        }
         let matches = matchingModes(on: display, includeHidden: allowHidden)
         guard !matches.isEmpty else {
             if !allowHidden, !matchingModes(on: display, includeHidden: true).isEmpty {

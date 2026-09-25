@@ -47,6 +47,15 @@ import Testing
         #expect(try ModeQuery(refreshRate: 60).resolve(on: display).modeID == 55)
     }
 
+    @Test func refusesToKeepAnUnknownResolution() throws {
+        let unknown = capture.display(currentModeID: 9_999)
+        let expected = ResoluteError.currentModeUnknown(display: "Built-in Retina Display")
+        #expect(throws: expected) { try ModeQuery(refreshRate: 60).resolve(on: unknown) }
+        #expect(throws: expected) { try ModeQuery(scale: 2).resolve(on: unknown) }
+        // A resolution given explicitly still works; it takes the fastest refresh rate.
+        #expect(try ModeQuery(resolution: "1496x967").resolve(on: unknown).modeID == 42)
+    }
+
     @Test func findsTheDefaultModeAndExactIDs() throws {
         let at60 = capture.display(currentModeID: 55)
         #expect(try ModeQuery(useDefault: true).resolve(on: at60).modeID == 54)
