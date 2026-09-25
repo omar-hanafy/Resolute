@@ -420,6 +420,21 @@ actor EventLog {
         ])
     }
 
+    /// A list in the order Resolute and RDM write keeps that order. One in another order,
+    /// such as a copy of Apple's file, keeps its own, and new entries go at the end.
+    @Test func insertsWhereTheListSortsOrAppends() throws {
+        let large = ScaleResolution.standard(width: 3840, height: 2160), small = ScaleResolution.standard(width: 1920, height: 1080)
+        var sorted = OverrideDraft(DisplayOverride(key: key, resolutions: [large, small]))
+        try sorted.add(.standard(width: 2560, height: 1440))
+        #expect(sorted.working.resolutions == [large, .standard(width: 2560, height: 1440), small])
+
+        let hiDPIFirst: [ScaleResolution] = [.hiDPI(width: 1280, height: 800, flags: .standard), small]
+        var apples = OverrideDraft(DisplayOverride(key: key, resolutions: hiDPIFirst))
+        try apples.add(.hiDPI(width: 1600, height: 900, flags: .standard))
+        #expect(apples.working.resolutions
+            == hiDPIFirst + [.standard(width: 3200, height: 1800), .hiDPI(width: 1600, height: 900, flags: .standard)])
+    }
+
     @Test func pairsANewHiDPIEntryWithAnExistingOneTimesEntry() throws {
         var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [.standard(width: 2560, height: 1440)]))
         #expect(try draft.add(.hiDPI(width: 1280, height: 720, flags: .standard)).isEmpty)

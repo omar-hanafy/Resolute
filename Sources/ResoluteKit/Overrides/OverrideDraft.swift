@@ -18,7 +18,7 @@ public struct OverrideDraft: Equatable, Sendable {
 
     /// Adds an entry after checking it is sensible and not already listed. A HiDPI entry is
     /// paired with a 1× entry at its pixel size, as RDM wrote them, unless the list has one.
-    /// Returns the entries added besides `entry`.
+    /// Returns the entries added besides `entry`. See `inserting(_:into:)` for where they go.
     @discardableResult
     public mutating func add(_ entry: ScaleResolution) throws -> [ScaleResolution] {
         try Self.validate(entry)
@@ -33,8 +33,18 @@ public struct OverrideDraft: Equatable, Sendable {
                 partners[entry] = partner
             }
         }
-        working.resolutions = ScaleResolutionCodec.canonicalOrder(working.resolutions + [entry] + alsoAdded)
+        working.resolutions = Self.inserting([entry] + alsoAdded, into: working.resolutions)
         return alsoAdded
+    }
+
+    /// `entries` added to `list`: where they sort when `list` is in the order Resolute and
+    /// RDM write, else after it (sorted among themselves), so a list in another order, such
+    /// as a copy of Apple's file, keeps that order.
+    static func inserting(_ entries: [ScaleResolution], into list: [ScaleResolution]) -> [ScaleResolution] {
+        guard ScaleResolutionCodec.canonicalOrder(list) == list else {
+            return list + ScaleResolutionCodec.canonicalOrder(entries)
+        }
+        return ScaleResolutionCodec.canonicalOrder(list + entries)
     }
 
     /// Removes `entries`, and the 1× entries this draft added to go with them.

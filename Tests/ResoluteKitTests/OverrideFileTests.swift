@@ -42,7 +42,7 @@ import Testing
             return
         }
         #expect(entries.allSatisfy { !$0.isEditable })
-        let encoded = ScaleResolutionCodec.encode(entries)
+        let encoded = try ScaleResolutionCodec.encode(entries)
         #expect(encoded.count == 4)
         #expect(encoded[0] as? Data == nineBytes)
         #expect(encoded[1] as? Data == twelveBytes)
@@ -50,48 +50,92 @@ import Testing
         #expect(encoded[3] as? Int == 32_768_800)
     }
 
-    /// A 1× entry at a HiDPI entry's pixel size is listed too: the file cannot say whether
-    /// someone added it or it was written to go with the HiDPI entry.
-    @Test func listsEveryEntryOneTimesFirst() {
+    /// Every entry is listed, in the file's order, including a 1× entry at a HiDPI entry's
+    /// pixel size: the file cannot say whether someone added it or it came with the HiDPI entry.
+    @Test func listsEveryEntryInTheFilesOrder() {
         let hiDPI = hexData("00000a00 00000640 00000001 00200000")
         let pairedOneTimes = hexData("00000a00 00000640")
         let other = hexData("00000780 00000438")
         #expect(ScaleResolutionCodec.decode([hiDPI, other, pairedOneTimes]) == [
-            .standard(width: 2560, height: 1600),
-            .standard(width: 1920, height: 1080),
             .hiDPI(width: 1280, height: 800, flags: HiDPIFlags(primary: 1, secondary: 0x0020_0000)),
+            .standard(width: 1920, height: 1080),
+            .standard(width: 2560, height: 1600),
         ])
+    }
+
+    /// Most of Apple's files list their entries in an order of their own, such as this
+    /// excerpt of the one for a 15-inch MacBook Pro panel. Whether macOS cares is unknown,
+    /// so a copy keeps it.
+    @Test func keepsTheOrderOfApplesFileInACopy() throws {
+        let key = OverrideKey(vendorID: 0x610, productID: 0xA040)
+        let elements = [
+            hexData("00000f00 00000960 00"),
+            hexData("00000a00 00000640 00000001 00200000"),
+            hexData("00000780 00000438 00000001 00200000"),
+            hexData("00000672 0000041a 00000001"),
+            hexData("00000f00 00000960 00000009 00a00000"),
+            hexData("00000780 00000438 00000009 00200000"),
+            hexData("00000500 000002d0"),
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: ["scale-resolutions": elements], format: .xml, options: 0)
+        var copy = try DisplayOverride(key: key, propertyList: data)
+        copy.productName = "Renamed"
+        let written = try #require(
+            try PropertyListSerialization.propertyList(from: copy.propertyListData(), format: nil) as? [String: Any]
+        )
+        #expect(written["scale-resolutions"] as? [Data] == elements)
     }
 
     /// Apple writes HiDPI modes as 12-byte entries (pixel width, pixel height, flags with
     /// bit 0 for HiDPI). They are kept byte for byte but count as the modes they describe.
-    @Test func readsApplesTwelveByteEntriesAsTheModesTheyDescribe() {
+    @Test func readsApplesTwelveByteEntriesAsTheModesTheyDescribe() throws {
         let hiDPI = hexData("00000a00 00000640 00000001")
         let oneTimes = hexData("00000780 000004b0 00000000")
         let entries = ScaleResolutionCodec.decode([hiDPI, oneTimes])
-        #expect(entries.map(\.sizeText) == ["1920 × 1200", "1280 × 800"])
-        #expect(entries.map(\.kindText) == ["1×", "HiDPI"])
-        #expect(entries[1].pixelSize?.width == 2560)
-        #expect(entries[1].summary == "1280 × 800 HiDPI (2560 × 1600 px, a 12-byte entry kept as is)")
+        #expect(entries.map(\.sizeText) == ["1280 × 800", "1920 × 1200"])
+        #expect(entries.map(\.kindText) == ["HiDPI", "1×"])
+        #expect(entries[0].pixelSize?.width == 2560)
+        #expect(entries[0].summary == "1280 × 800 HiDPI (2560 × 1600 px, a 12-byte entry kept as is)")
         #expect(entries.allSatisfy { !$0.isEditable })
-        #expect(entries[1].sameMode(as: .hiDPI(width: 1280, height: 800, flags: .standard)))
-        #expect(ScaleResolution.standard(width: 1920, height: 1200).sameMode(as: entries[0]))
-        #expect(ScaleResolutionCodec.encode(entries).compactMap { $0 as? Data } == [oneTimes, hiDPI])
+        #expect(entries[0].sameMode(as: .hiDPI(width: 1280, height: 800, flags: .standard)))
+        #expect(ScaleResolution.standard(width: 1920, height: 1200).sameMode(as: entries[1]))
+        #expect(try ScaleResolutionCodec.encode(entries).compactMap { $0 as? Data } == [hiDPI, oneTimes])
     }
 
-    @Test func writesExactlyTheListedEntriesOneTimesFirstLargestFirst() {
-        let encoded = ScaleResolutionCodec.encode([
+    /// Apple writes 1× modes for some displays as 12-byte entries whose flags word lacks
+    /// bit 0: all 156 in the files macOS 27 ships have flags 2 and sizes like 1920 × 1080.
+    @Test func readsApplesTwelveByteEntriesWithoutTheHiDPIBitAsOneTimes() {
+        let entries = ScaleResolutionCodec.decode([hexData("00000780 00000438 00000002"), hexData("00000400 00000300 00000001")])
+        #expect(entries.map(\.kindText) == ["1×", "HiDPI"])
+        #expect(entries.map(\.sizeText) == ["1920 × 1080", "512 × 384"])
+        #expect(entries[0].sameMode(as: .standard(width: 1920, height: 1080)))
+    }
+
+    @Test func writesExactlyTheListedEntriesInTheirOrder() throws {
+        let encoded = try ScaleResolutionCodec.encode([
             .hiDPI(width: 1280, height: 720, flags: .standard),
             .standard(width: 1920, height: 1080),
             .hiDPI(width: 1920, height: 1080, flags: .standard),
             .standard(width: 2560, height: 1440),
         ]).compactMap { ($0 as? Data).map { $0.map { String(format: "%02x", $0) }.joined() } }
         #expect(encoded == [
-            "00000a00000005a0",                  // 2560×1440 at 1×
+            "00000a00000005a00000000900a00000",  // 1280×720 HiDPI
             "0000078000000438",                  // 1920×1080 at 1×
             "00000f00000008700000000900a00000",  // 1920×1080 HiDPI
-            "00000a00000005a00000000900a00000",  // 1280×720 HiDPI
+            "00000a00000005a0",                  // 2560×1440 at 1×
         ])
+    }
+
+    /// The editors check entries before they get here; a size a file cannot hold is an
+    /// error, not a crash.
+    @Test func refusesToWriteSizesAFileCannotHold() {
+        for entry: ScaleResolution in [
+            .standard(width: -1, height: 1080), .standard(width: 0, height: 1080), .standard(width: 1920, height: Int.max),
+            .hiDPI(width: Int.max, height: 1080, flags: .standard), .hiDPI(width: 1920, height: Int(UInt32.max), flags: .standard),
+        ] {
+            #expect(throws: ResoluteError.self, "\(entry)") { try ScaleResolutionCodec.encode([entry]) }
+        }
+        #expect(ScaleResolution.hiDPI(width: Int.max, height: 1080, flags: .standard).pixelSize == nil)
     }
 
     @Test(arguments: ["00000009 00a00000", "0x9 0xa00000", "0000000900a00000", "9,a00000"])
@@ -391,7 +435,7 @@ import Testing
             }
             let data = try DisplayOverride(key: key, resolutions: entries).propertyListData()
             let reread = try DisplayOverride(key: key, propertyList: data)
-            #expect(reread.resolutions == ScaleResolutionCodec.canonicalOrder(entries))
+            #expect(reread.resolutions == entries)
         }
     }
 }

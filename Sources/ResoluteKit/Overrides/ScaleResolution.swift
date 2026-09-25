@@ -119,12 +119,16 @@ public enum ScaleResolution: Hashable, Sendable {
         }
     }
 
-    /// The pixels macOS renders for this entry.
+    /// The pixels macOS renders for this entry; nil when it names none, or when doubling a
+    /// HiDPI size would overflow.
     public var pixelSize: (width: Int, height: Int)? {
         switch self {
-        case .hiDPI(let width, let height, _): (width * 2, height * 2)
-        case .standard(let width, let height): (width, height)
-        case .preserved(let entry): entry.describedMode?.pixelSize
+        case .hiDPI(let width, let height, _):
+            let (pixelWidth, wideOverflow) = width.multipliedReportingOverflow(by: 2)
+            let (pixelHeight, tallOverflow) = height.multipliedReportingOverflow(by: 2)
+            return wideOverflow || tallOverflow ? nil : (pixelWidth, pixelHeight)
+        case .standard(let width, let height): return (width, height)
+        case .preserved(let entry): return entry.describedMode?.pixelSize
         }
     }
 
@@ -132,7 +136,7 @@ public enum ScaleResolution: Hashable, Sendable {
     public var summary: String {
         switch self {
         case .hiDPI(let width, let height, let flags):
-            "\(width) × \(height) HiDPI (\(width * 2) × \(height * 2) px, flags \(flags))"
+            "\(width) × \(height) HiDPI (\(pixelSize.map { "\($0.width) × \($0.height)" } ?? "?") px, flags \(flags))"
         case .standard(let width, let height):
             "\(width) × \(height) 1×"
         case .preserved(let entry):
@@ -199,30 +203,48 @@ public enum PreservedEntry: Hashable, Sendable {
 }
 
 /// Reads and writes `scale-resolutions` arrays. What is listed is exactly what is written,
-/// so an override reads back the way it was saved.
+/// in the file's order, so an override reads back the way it was saved and a copy of
+/// Apple's file keeps Apple's order.
 public enum ScaleResolutionCodec {
-    /// Every element, once, in `canonicalOrder`.
+    /// Every element, in the file's order. An element repeated byte for byte is listed
+    /// once: it names the same thing again, and each row needs an identity of its own.
     public static func decode(_ elements: [Any]) -> [ScaleResolution] {
         var seen = Set<ScaleResolution>()
-        return canonicalOrder(elements.map(decodeElement).filter { seen.insert($0).inserted })
+        return elements.map(decodeElement).filter { seen.insert($0).inserted }
     }
 
-    /// The elements for `entries`, in `canonicalOrder`.
-    public static func encode(_ entries: [ScaleResolution]) -> [Any] {
-        canonicalOrder(entries).map { entry -> Any in
+    /// The elements for `entries`, in their order. The editors check entries before they get
+    /// here; a size a file cannot hold is still an error rather than a crash.
+    public static func encode(_ entries: [ScaleResolution]) throws -> [Any] {
+        try entries.map { entry -> Any in
             switch entry {
             case .standard(let width, let height):
-                data([UInt32(width), UInt32(height)])
-            case .hiDPI(let width, let height, let flags):
-                data([UInt32(width * 2), UInt32(height * 2), flags.primary, flags.secondary])
+                guard let width = word(width), let height = word(height) else { throw unwritable(entry) }
+                return data([width, height])
+            case .hiDPI(_, _, let flags):
+                guard let pixels = entry.pixelSize, let width = word(pixels.width), let height = word(pixels.height) else {
+                    throw unwritable(entry)
+                }
+                return data([width, height, flags.primary, flags.secondary])
             case .preserved(let element):
-                element.propertyListValue
+                return element.propertyListValue
             }
         }
     }
 
+    /// A pixel count as a file stores it, or nil when a file cannot: zero, negative or
+    /// wider than 32 bits. A zero would also read back as an entry Resolute keeps as is.
+    private static func word(_ pixels: Int) -> UInt32? {
+        pixels > 0 && pixels <= Int(UInt32.max) ? UInt32(pixels) : nil
+    }
+
+    private static func unwritable(_ entry: ScaleResolution) -> ResoluteError {
+        .invalidEntry("\(entry.sizeText) \(entry.kindText) cannot be written: override sizes go from 1 to \(UInt32.max) pixels.")
+    }
+
     /// 1× entries, then HiDPI entries, each largest first as RDM wrote them (kept entries
     /// that name a mode sort with it), then the other elements in their original order.
+    /// New entries go where they sort when a list is already in this order.
     public static func canonicalOrder(_ entries: [ScaleResolution]) -> [ScaleResolution] {
         func rank(_ entry: ScaleResolution) -> Int {
             switch entry.describedMode {

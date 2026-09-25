@@ -129,7 +129,7 @@ public struct DisplayOverride: Equatable, Sendable {
         if let productName, !productName.isEmpty {
             dictionary[Self.productNameKey] = productName
         }
-        let encoded = ScaleResolutionCodec.encode(resolutions)
+        let encoded = try ScaleResolutionCodec.encode(resolutions)
         if !encoded.isEmpty {
             dictionary[Self.resolutionsKey] = encoded
             if isNew, dictionary[Self.targetPPMMKey] == nil {
