@@ -7,7 +7,7 @@ source "$(dirname "$0")/lib.sh"
 
 APP_DIR="${RESOLUTE_APP_DIR:-/Applications}"
 BIN_DIR="${RESOLUTE_BIN_DIR:-/usr/local/bin}"
-BUNDLE_ID="com.omarhanafy.Resolute"
+BUNDLE_ID="${RESOLUTE_BUNDLE_ID:-com.omarhanafy.Resolute}"
 APP_PATH="$APP_DIR/Resolute.app"
 
 # The old process may still be exiting, or may be asking about unsaved custom
