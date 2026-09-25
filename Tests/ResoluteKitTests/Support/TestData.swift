@@ -133,14 +133,23 @@ final class FakeDisplayService: DisplayControlling, @unchecked Sendable {
     private let lock = NSLock()
     private var display: Display
     private let refusedModeIDs: Set<Int32>
+    private let ignoredModeIDs: Set<Int32>
     private let reportsCurrentMode: Bool
     private var recorded: [Call] = []
 
-    /// `reportsCurrentMode: false` makes `currentModeID(of:)` return nil, as CoreGraphics
-    /// can for a hidden mode, while `displays()` still knows it.
-    init(display: Display, refusing refusedModeIDs: Set<Int32> = [], reportsCurrentMode: Bool = true) {
+    /// `refusing` modes fail with an error; `ignoring` modes report success but leave the
+    /// display as it was, as SkyLight does. `reportsCurrentMode: false` makes
+    /// `currentModeID(of:)` return nil, as CoreGraphics can for a hidden mode, while
+    /// `displays()` still knows it.
+    init(
+        display: Display,
+        refusing refusedModeIDs: Set<Int32> = [],
+        ignoring ignoredModeIDs: Set<Int32> = [],
+        reportsCurrentMode: Bool = true
+    ) {
         self.display = display
         self.refusedModeIDs = refusedModeIDs
+        self.ignoredModeIDs = ignoredModeIDs
         self.reportsCurrentMode = reportsCurrentMode
     }
 
@@ -162,7 +171,7 @@ final class FakeDisplayService: DisplayControlling, @unchecked Sendable {
                 throw ResoluteError.coreGraphics(code: 1001, operation: "select the display mode")
             }
             recorded.append(Call(modeID: modeID, scope: scope))
-            display.currentModeID = modeID
+            if !ignoredModeIDs.contains(modeID) { display.currentModeID = modeID }
         }
     }
 

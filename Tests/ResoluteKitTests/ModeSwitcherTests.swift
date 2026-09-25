@@ -57,6 +57,22 @@ import Testing
         }
     }
 
+    @Test func doesNotAskAboutAModeThatNeverApplied() {
+        let service = FakeDisplayService(display: TestData.fullHD(), ignoring: [90])
+        var asked = false
+        do {
+            _ = try ModeSwitcher(service: service).apply(modeID: 90, to: 2, trial: true) {
+                asked = true
+                return .keep
+            }
+            Issue.record("expected the switch to be reported as not applied")
+        } catch {
+            #expect(error as? ResoluteError == .modeNotApplied(display: "Full HD Monitor"))
+        }
+        #expect(!asked)
+        #expect(service.calls == [Call(modeID: 90, scope: .session)])
+    }
+
     @Test func leavesTheCurrentModeAlone() throws {
         let service = FakeDisplayService(display: TestData.fullHD())
         let outcome = try ModeSwitcher(service: service).apply(modeID: 1, to: 2, trial: true) { .revert }

@@ -44,6 +44,11 @@ public struct ModeSwitcher: Sendable {
 
         try service.apply(modeID: modeID, to: displayID, scope: trial ? .session : .permanent)
         guard trial else { return .applied }
+        // SkyLight reports no errors, so check the display really switched before asking
+        // whether to keep the mode.
+        guard currentModeID(of: displayID) == modeID else {
+            throw ResoluteError.modeNotApplied(display: before?.name ?? "The display")
+        }
 
         switch decide() {
         case .keep:
@@ -64,5 +69,11 @@ public struct ModeSwitcher: Sendable {
             }
             throw ResoluteError.revertFailed(display: before?.name ?? "the display")
         }
+    }
+
+    /// The mode `displayID` uses now. The full snapshot also knows hidden modes, which
+    /// CoreGraphics may not report.
+    public func currentModeID(of displayID: CGDirectDisplayID) -> Int32? {
+        service.displays().first { $0.id == displayID }?.currentModeID ?? service.currentModeID(of: displayID)
     }
 }
