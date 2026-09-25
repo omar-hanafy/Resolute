@@ -83,7 +83,7 @@ extension ResoluteError: LocalizedError {
         case .displayWentAway(let display):
             "\(display) went away before the new mode could be saved, so it was not saved. If the display comes back in that mode, it lasts until you log out."
         case .displayDidNotReturn(let display):
-            "\(display) has not come back, so its previous mode could not be restored. It comes back when you log out, or run `resolute set --default`."
+            "\(display) did not come back in time, so its previous mode was not restored. The previous mode comes back when you log out, or run `resolute set --default` once the display is back."
         }
     }
 }

@@ -40,12 +40,28 @@ public struct ModeSwitcher: Sendable {
         public let modeID: Int32
         /// Put back when `modeID` cannot be: the display's default mode.
         public let fallbackModeID: Int32?
+        /// The mode on trial. Only it is undone: a display back in another mode, whether
+        /// its saved one, one chosen since or another display given the same ID, is left
+        /// as it is.
+        public let trialModeID: Int32
+        /// What to report once the display is back: why the switch failed, when the mode on
+        /// trial never showed.
+        public let failure: ResoluteError?
 
-        public init(displayID: CGDirectDisplayID, displayName: String, modeID: Int32, fallbackModeID: Int32?) {
+        public init(
+            displayID: CGDirectDisplayID,
+            displayName: String,
+            modeID: Int32,
+            fallbackModeID: Int32?,
+            trialModeID: Int32,
+            failure: ResoluteError? = nil
+        ) {
             self.displayID = displayID
             self.displayName = displayName
             self.modeID = modeID
             self.fallbackModeID = fallbackModeID
+            self.trialModeID = trialModeID
+            self.failure = failure
         }
     }
 
@@ -55,6 +71,8 @@ public struct ModeSwitcher: Sendable {
         case waiting
         /// The display is back and uses this mode again, until the user logs out.
         case restored(to: Int32)
+        /// The display is back in a mode other than the one on trial, so it was left as it is.
+        case leftAlone(current: Int32)
     }
 
     private let service: any DisplayControlling
@@ -94,18 +112,21 @@ public struct ModeSwitcher: Sendable {
 
         try service.apply(modeID: modeID, to: displayID, scope: scope)
         guard trial else { return .applied }
-        let restore = Self.restore(on: displayID, named: name, before: before, previous: previous, leaving: modeID)
+        let restore = { (failure: ResoluteError?) in
+            Self.restore(on: displayID, named: name, before: before, previous: previous, trial: modeID, failure: failure)
+        }
         // SkyLight reports no errors, so check that a hidden mode really took before asking
         // whether to keep it; CoreGraphics reports its own failures for listed modes.
         let isListed = before?.modes.first { $0.modeID == modeID }?.origin == .system
         if !isListed || verifiesListedModes {
             guard waitUntilCurrent(modeID, on: displayID) else {
                 Self.log.error("\(name, privacy: .public) did not report mode \(modeID) within half a second")
+                let notShown = ResoluteError.modeNotApplied(display: before?.name ?? "The display")
                 // Put the previous mode back in case the switch lands after all; when it never
                 // happened this changes nothing.
-                let undone = try revert(restore, name: name)
+                let undone = try revert(restore(notShown), name: name)
                 if case .restorePending = undone { return undone }
-                throw ResoluteError.modeNotApplied(display: before?.name ?? "The display")
+                throw notShown
             }
             Self.log.info("\(name, privacy: .public) reports mode \(modeID); asking whether to keep it")
         }
@@ -124,25 +145,45 @@ public struct ModeSwitcher: Sendable {
             Self.log.notice("Kept mode \(modeID) on \(name, privacy: .public) until logout")
             return .keptForSession
         case .revert:
-            return try revert(restore, name: name)
+            return try revert(restore(nil), name: name)
         }
     }
 
     /// Finishes a restore that waited for its display. While the display is away nothing
-    /// changes; once it is back, the previous mode (else the default one) returns for the
-    /// session. Throws `revertFailed` when the display is back but takes neither mode.
-    public func finish(_ pending: PendingRestore) throws -> RestoreProgress {
-        guard let modeID = try putBack(pending) else { return .waiting }
+    /// changes. Once it is back and shows the mode on trial, or does not say which mode it
+    /// shows, the previous mode (else the default one) returns for the session; a display
+    /// back in any other mode is left as it is. Throws `revertFailed` when the display takes
+    /// neither mode, which one that has only just come back may do for a moment, so callers
+    /// try again; `logsFailures` lets them log only the first failure.
+    public func finish(_ pending: PendingRestore, logsFailures: Bool = true) throws -> RestoreProgress {
+        guard isOnline(pending.displayID) else { return .waiting }
+        if let current = currentModeID(of: pending.displayID), current != pending.trialModeID {
+            Self.log.notice("""
+                \(pending.displayName, privacy: .public) is back in mode \(current), not the mode on trial, \
+                so it is left as it is
+                """)
+            return .leftAlone(current: current)
+        }
+        guard let modeID = try putBack(pending, logsFailures: logsFailures) else { return .waiting }
         Self.log.notice("\(pending.displayName, privacy: .public) is back; put mode \(modeID) back for the session")
         return .restored(to: modeID)
     }
 
-    /// Notes that `pending` will not be finished: its display stayed away for `wait`.
+    /// Notes that `pending` will not be finished after `wait`: its display stayed away, or
+    /// came back but took neither mode.
     public func giveUp(on pending: PendingRestore, after wait: Duration) {
-        Self.log.error("""
-            \(pending.displayName, privacy: .public) did not come back within \(wait.components.seconds) seconds, \
-            so mode \(pending.modeID) was not put back
-            """)
+        let seconds = wait.components.seconds
+        if isOnline(pending.displayID) {
+            Self.log.error("""
+                Gave up putting mode \(pending.modeID) back on \(pending.displayName, privacy: .public): \
+                it is back but took neither that mode nor its default one within \(seconds) seconds
+                """)
+        } else {
+            Self.log.error("""
+                \(pending.displayName, privacy: .public) did not come back within \(seconds) seconds, \
+                so mode \(pending.modeID) was not put back
+                """)
+        }
     }
 
     /// What undoing a trial of `modeID` puts back: the mode in use before, else the default
@@ -152,14 +193,15 @@ public struct ModeSwitcher: Sendable {
         named name: String,
         before: Display?,
         previous: Int32?,
-        leaving modeID: Int32
+        trial modeID: Int32,
+        failure: ResoluteError?
     ) -> PendingRestore? {
         let fallback = before?.modes.first { $0.origin == .system && $0.isDefault }?.modeID
         let candidates = [previous, fallback].compactMap { $0 }.filter { $0 != modeID }
         guard let first = candidates.first else { return nil }
         return PendingRestore(
             displayID: displayID, displayName: name, modeID: first,
-            fallbackModeID: candidates.dropFirst().first { $0 != first }
+            fallbackModeID: candidates.dropFirst().first { $0 != first }, trialModeID: modeID, failure: failure
         )
     }
 
@@ -167,7 +209,7 @@ public struct ModeSwitcher: Sendable {
     /// the restore back to finish later when the display went away.
     private func revert(_ restore: PendingRestore?, name: String) throws -> Outcome {
         guard let restore else { throw ResoluteError.revertFailed(display: name) }
-        guard let modeID = try putBack(restore) else {
+        guard let modeID = try putBack(restore, logsFailures: true) else {
             Self.log.notice("""
                 \(restore.displayName, privacy: .public) went away before mode \(restore.modeID) could be put back; \
                 the restore waits for it to come back
@@ -180,17 +222,19 @@ public struct ModeSwitcher: Sendable {
 
     /// Puts the mode `restore` names back for the session, else its fallback. Returns nil,
     /// having changed nothing, while the display is away.
-    private func putBack(_ restore: PendingRestore) throws -> Int32? {
+    private func putBack(_ restore: PendingRestore, logsFailures: Bool) throws -> Int32? {
         guard isOnline(restore.displayID) else { return nil }
         for candidate in [restore.modeID, restore.fallbackModeID].compactMap({ $0 }) {
             do {
                 try service.apply(modeID: candidate, to: restore.displayID, scope: trialScope)
                 return candidate
-            } catch {
+            } catch where logsFailures {
                 Self.log.error("""
                     Could not put mode \(candidate) back on \(restore.displayName, privacy: .public): \
                     \(error.localizedDescription, privacy: .public)
                     """)
+            } catch {
+                continue
             }
         }
         // The display can go away while the modes are being put back.

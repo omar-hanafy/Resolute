@@ -76,7 +76,7 @@ final class TestClock {
     let reports = Reports()
     let clock = TestClock()
     /// Mode 1 was in use before the trial, and it is also the default mode.
-    let pending = ModeSwitcher.PendingRestore(displayID: 2, displayName: "DELL P2419H", modeID: 1, fallbackModeID: nil)
+    let pending = ModeSwitcher.PendingRestore(displayID: 2, displayName: "DELL P2419H", modeID: 1, fallbackModeID: nil, trialModeID: 90)
 
     /// A coordinator that answers the countdown with `answer` and collects alerts.
     func coordinator(_ monitor: DroppingMonitor, answer: @escaping @MainActor () -> ModeSwitcher.Decision) -> ModeChangeCoordinator {
