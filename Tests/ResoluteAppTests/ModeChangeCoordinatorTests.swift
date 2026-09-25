@@ -4,58 +4,108 @@ import Testing
 @testable import ResoluteApp
 @testable import ResoluteKit
 
-/// A monitor with a hidden mode that can drop off and come back, as one does when it loses
-/// its link to a mode it cannot show. Records every switch.
-final class DroppingMonitor: DisplayControlling, @unchecked Sendable {
+/// A built-in display (1) and a monitor (2), each with a hidden mode. A display can drop
+/// off and come back, as one does when it loses its link to a mode it cannot show, and
+/// can refuse modes. Records every switch.
+final class ReconnectingDisplays: DisplayControlling, @unchecked Sendable {
     struct Change: Equatable {
+        var displayID: CGDirectDisplayID
         var modeID: Int32
         var scope: ConfigurationScope
     }
 
     private let lock = NSLock()
-    private var display = Display(
-        id: 2, name: "DELL P2419H", currentModeID: 1,
-        modes: [
-            DisplayMode(modeID: 1, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 60, ioFlags: 0x7),
-            DisplayMode(modeID: 3, width: 1280, height: 720, pixelWidth: 1280, pixelHeight: 720, refreshRate: 60, ioFlags: 0x3),
-            DisplayMode(
-                modeID: 90, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080, refreshRate: 75,
-                ioFlags: 0x1, origin: .hidden
-            ),
-        ],
-        privateModes: .trusted
-    )
-    private var isAway = false
-    private let refused: Set<Int32>
+    private var list = [
+        Display(
+            id: 1, name: "Built-in Retina Display", isBuiltin: true, isMain: true, currentModeID: 51,
+            modes: [
+                ReconnectingDisplays.mode(51, flags: 0x7), ReconnectingDisplays.mode(52),
+                ReconnectingDisplays.mode(91, origin: .hidden),
+            ],
+            privateModes: .trusted
+        ),
+        Display(
+            id: 2, name: "DELL P2419H", currentModeID: 1,
+            modes: [
+                ReconnectingDisplays.mode(1, flags: 0x7), ReconnectingDisplays.mode(3),
+                ReconnectingDisplays.mode(90, origin: .hidden),
+            ],
+            privateModes: .trusted
+        ),
+    ]
+    private var away: Set<CGDirectDisplayID> = []
+    private var dropsOnSwitchTo: Int32?
     private var recorded: [Change] = []
+    private var refusedModes: Set<Int32> = []
 
-    init(refusing refused: Set<Int32> = []) {
-        self.refused = refused
+    static func mode(_ id: Int32, flags: UInt32 = 0x3, origin: DisplayMode.Origin = .system) -> DisplayMode {
+        DisplayMode(
+            modeID: id, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080,
+            refreshRate: Double(id), ioFlags: flags, origin: origin
+        )
     }
 
     var changes: [Change] { lock.withLock { recorded } }
 
-    func goAway() { lock.withLock { isAway = true } }
-    func comeBack() { lock.withLock { isAway = false } }
+    /// Modes every display refuses.
+    var refused: Set<Int32> {
+        get { lock.withLock { refusedModes } }
+        set { lock.withLock { refusedModes = newValue } }
+    }
 
-    func displays() -> [Display] { lock.withLock { isAway ? [] : [display] } }
+    func goAway(_ displayID: CGDirectDisplayID) {
+        _ = lock.withLock { away.insert(displayID) }
+    }
+
+    /// Brings the display back, showing `modeID` when given.
+    func comeBack(_ displayID: CGDirectDisplayID, showing modeID: Int32? = nil) {
+        lock.withLock {
+            away.remove(displayID)
+            if let modeID, let index = list.firstIndex(where: { $0.id == displayID }) {
+                list[index].currentModeID = modeID
+            }
+        }
+    }
+
+    /// Makes the monitor drop off as soon as it switches to `modeID`.
+    func dropMonitor(whenSwitchedTo modeID: Int32) {
+        lock.withLock { dropsOnSwitchTo = modeID }
+    }
+
+    func displays() -> [Display] { lock.withLock { list.filter { !away.contains($0.id) } } }
 
     func currentModeID(of displayID: CGDirectDisplayID) -> Int32? {
-        lock.withLock { isAway ? nil : display.currentModeID }
+        lock.withLock { away.contains(displayID) ? nil : list.first { $0.id == displayID }?.currentModeID }
     }
 
     func apply(modeID: Int32, to displayID: CGDirectDisplayID, scope: ConfigurationScope) throws {
         try lock.withLock {
-            guard !isAway else { throw ResoluteError.displayNotFound("id:\(displayID)") }
-            guard !refused.contains(modeID) else {
+            guard !away.contains(displayID), let index = list.firstIndex(where: { $0.id == displayID }) else {
+                throw ResoluteError.displayNotFound("id:\(displayID)")
+            }
+            guard !refusedModes.contains(modeID) else {
                 throw ResoluteError.coreGraphics(code: 1001, operation: "select the display mode")
             }
-            recorded.append(Change(modeID: modeID, scope: scope))
-            display.currentModeID = modeID
+            recorded.append(Change(displayID: displayID, modeID: modeID, scope: scope))
+            list[index].currentModeID = modeID
+            if displayID == 2, modeID == dropsOnSwitchTo {
+                away.insert(2)
+                dropsOnSwitchTo = nil
+            }
         }
     }
 
     func setMirroring(_ enabled: Bool) throws {}
+}
+
+/// Answers the Keep/Revert countdown with what each test lines up, one answer per switch.
+@MainActor
+final class Countdown {
+    var answers: [() -> ModeSwitcher.Decision] = []
+
+    func answer() -> ModeSwitcher.Decision {
+        answers.isEmpty ? .revert : answers.removeFirst()()
+    }
 }
 
 /// What the coordinator would have shown in alerts.
@@ -71,130 +121,187 @@ final class TestClock {
 
 @MainActor
 @Suite struct ModeChangeCoordinatorTests {
-    typealias Change = DroppingMonitor.Change
+    typealias Change = ReconnectingDisplays.Change
 
+    let displays = ReconnectingDisplays()
+    let countdown = Countdown()
     let reports = Reports()
     let clock = TestClock()
-    /// Mode 1 was in use before the trial, and it is also the default mode.
+    let coordinator: ModeChangeCoordinator
+    /// Mode 1 was in use on the monitor before the trial of mode 90; it is also the default.
     let pending = ModeSwitcher.PendingRestore(displayID: 2, displayName: "DELL P2419H", modeID: 1, fallbackModeID: nil, trialModeID: 90)
 
-    /// A coordinator that answers the countdown with `answer` and collects alerts.
-    func coordinator(_ monitor: DroppingMonitor, answer: @escaping @MainActor () -> ModeSwitcher.Decision) -> ModeChangeCoordinator {
-        let reports = reports
-        let clock = clock
-        return ModeChangeCoordinator(
-            service: monitor,
-            decide: answer,
+    init() {
+        let (countdown, reports, clock) = (countdown, reports, clock)
+        coordinator = ModeChangeCoordinator(
+            service: displays,
+            decide: { countdown.answer() },
             report: { reports.errors.append(($0 as? ResoluteError) ?? .cancelled) },
             now: { clock.now }
         )
     }
 
-    @Test func putsThePreviousModeBackWhenTheDisplayReturns() {
-        let monitor = DroppingMonitor()
-        let coordinator = coordinator(monitor) {
-            monitor.goAway()
+    /// Tries mode 90 on the monitor, which drops off while the person is asked.
+    func tryModeThatMakesTheMonitorGoAway() {
+        let displays = displays
+        countdown.answers.append {
+            displays.goAway(2)
             return .revert
         }
         coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
+    }
+
+    @Test func putsThePreviousModeBackWhenTheDisplayReturns() {
+        tryModeThatMakesTheMonitorGoAway()
         #expect(coordinator.pendingRestores == [pending])
         coordinator.displaysDidChange()
-        #expect(monitor.changes == [Change(modeID: 90, scope: .session)])
+        #expect(displays.changes == [Change(displayID: 2, modeID: 90, scope: .session)])
 
-        monitor.comeBack()
+        displays.comeBack(2)
         coordinator.displaysDidChange()
-        #expect(monitor.changes == [Change(modeID: 90, scope: .session), Change(modeID: 1, scope: .session)])
+        #expect(displays.changes == [
+            Change(displayID: 2, modeID: 90, scope: .session), Change(displayID: 2, modeID: 1, scope: .session),
+        ])
         #expect(coordinator.pendingRestores.isEmpty)
         // Reconnecting is no reason for an alert.
         #expect(reports.errors.isEmpty)
     }
 
     @Test func givesUpOnADisplayThatStaysAwayForTwoMinutes() {
-        let monitor = DroppingMonitor()
-        let coordinator = coordinator(monitor) {
-            monitor.goAway()
-            return .revert
-        }
-        coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
+        tryModeThatMakesTheMonitorGoAway()
         clock.now += .seconds(119)
-        coordinator.giveUpOnExpiredRestores()
+        coordinator.expireRestores()
         #expect(coordinator.pendingRestores == [pending])
 
         clock.now += .seconds(1)
-        coordinator.giveUpOnExpiredRestores()
+        coordinator.expireRestores()
         #expect(coordinator.pendingRestores.isEmpty)
-        monitor.comeBack()
+        displays.comeBack(2)
         coordinator.displaysDidChange()
-        #expect(monitor.changes == [Change(modeID: 90, scope: .session)])
+        #expect(displays.changes == [Change(displayID: 2, modeID: 90, scope: .session)])
         #expect(reports.errors.isEmpty)
     }
 
-    /// The timer may be late; a display that comes back after the deadline is left alone.
-    @Test func leavesADisplayThatComesBackTooLateAlone() {
-        let monitor = DroppingMonitor()
-        let coordinator = coordinator(monitor) {
-            monitor.goAway()
-            return .revert
-        }
-        coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
-        #expect(coordinator.pendingRestores == [pending])
-        clock.now += .seconds(121)
-        monitor.comeBack()
+    /// A screen change can be missed, so the end of the wait is one last try.
+    @Test func triesOnceMoreWhenTheWaitEnds() {
+        tryModeThatMakesTheMonitorGoAway()
+        displays.comeBack(2)
+        clock.now += .seconds(120)
+        coordinator.expireRestores()
+        #expect(displays.changes.last == Change(displayID: 2, modeID: 1, scope: .session))
+        #expect(coordinator.pendingRestores.isEmpty)
+        #expect(reports.errors.isEmpty)
+    }
+
+    /// Only the mode on trial is undone.
+    @Test func leavesADisplayThatCameBackInAnotherModeAlone() {
+        tryModeThatMakesTheMonitorGoAway()
+        displays.comeBack(2, showing: 1)
         coordinator.displaysDidChange()
-        #expect(monitor.changes == [Change(modeID: 90, scope: .session)])
+        #expect(displays.changes == [Change(displayID: 2, modeID: 90, scope: .session)])
         #expect(coordinator.pendingRestores.isEmpty)
         #expect(reports.errors.isEmpty)
     }
 
     @Test func revertsStraightAwayWhileTheDisplayStays() {
-        let monitor = DroppingMonitor()
-        let coordinator = coordinator(monitor) { .revert }
         coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
-        #expect(monitor.changes == [Change(modeID: 90, scope: .session), Change(modeID: 1, scope: .session)])
+        #expect(displays.changes == [
+            Change(displayID: 2, modeID: 90, scope: .session), Change(displayID: 2, modeID: 1, scope: .session),
+        ])
         #expect(coordinator.pendingRestores.isEmpty)
         #expect(reports.errors.isEmpty)
     }
 
     /// Nothing will save the mode later, so the person hears about it now.
     @Test func saysAKeptModeWasNotSavedWhenTheDisplayWentAway() {
-        let monitor = DroppingMonitor()
-        let coordinator = coordinator(monitor) {
-            monitor.goAway()
+        let displays = displays
+        countdown.answers.append {
+            displays.goAway(2)
             return .keep
         }
         coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
         #expect(reports.errors == [.displayWentAway(display: "DELL P2419H")])
         #expect(coordinator.pendingRestores.isEmpty)
-        #expect(monitor.changes == [Change(modeID: 90, scope: .session)])
+        #expect(displays.changes == [Change(displayID: 2, modeID: 90, scope: .session)])
     }
 
-    /// Once the person picks a mode for the display, the old one must not come back.
-    @Test func dropsAWaitingRestoreWhenTheDisplayGetsANewMode() {
-        let monitor = DroppingMonitor()
-        let coordinator = coordinator(monitor) {
-            monitor.goAway()
-            return .revert
-        }
+    /// Shown once the display is back, as it is when the display stays.
+    @Test func reportsAModeThatNeverShowedOnceTheDisplayIsBack() {
+        displays.dropMonitor(whenSwitchedTo: 90)
         coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
-        #expect(coordinator.pendingRestores == [pending])
-        monitor.comeBack()
-        coordinator.apply(modeID: 3, to: 2, needsConfirmation: false)
+        #expect(reports.errors.isEmpty)
+        displays.comeBack(2)
         coordinator.displaysDidChange()
-        #expect(monitor.changes == [Change(modeID: 90, scope: .session), Change(modeID: 3, scope: .permanent)])
+        #expect(displays.changes.last == Change(displayID: 2, modeID: 1, scope: .session))
+        #expect(reports.errors == [.modeNotApplied(display: "DELL P2419H")])
+    }
+
+    /// A display that has only just come back may not take a mode yet; it is shown only
+    /// when the wait ends, by which time it is not reconnecting any more.
+    @Test func triesARefusedRestoreAgainAndReportsItOnlyWhenTheWaitEnds() {
+        tryModeThatMakesTheMonitorGoAway()
+        displays.refused = [1]
+        displays.comeBack(2)
+        coordinator.displaysDidChange()
+        coordinator.displaysDidChange()
+        #expect(coordinator.pendingRestores == [pending])
+        #expect(reports.errors.isEmpty)
+
+        clock.now += .seconds(120)
+        coordinator.expireRestores()
+        #expect(reports.errors == [.revertFailed(display: "DELL P2419H")])
         #expect(coordinator.pendingRestores.isEmpty)
     }
 
-    /// Once the display is back it is no longer reconnecting, so a failure is shown.
-    @Test func reportsARestoreTheReturningDisplayRefuses() {
-        let monitor = DroppingMonitor(refusing: [1])
-        let coordinator = coordinator(monitor) {
-            monitor.goAway()
+    @Test func restoresOnALaterChangeOnceTheDisplayTakesTheMode() {
+        tryModeThatMakesTheMonitorGoAway()
+        displays.refused = [1]
+        displays.comeBack(2)
+        coordinator.displaysDidChange()
+        displays.refused = []
+        coordinator.displaysDidChange()
+        #expect(displays.changes.last == Change(displayID: 2, modeID: 1, scope: .session))
+        #expect(coordinator.pendingRestores.isEmpty)
+        #expect(reports.errors.isEmpty)
+    }
+
+    /// The new switch starts from the mode the person had, not from the one on trial, so
+    /// undoing it cannot bring that one back.
+    @Test func putsThePreviousModeBackBeforeANewSwitchOfTheSameDisplay() {
+        tryModeThatMakesTheMonitorGoAway()
+        displays.comeBack(2)
+        coordinator.apply(modeID: 3, to: 2, needsConfirmation: false)
+        #expect(displays.changes == [
+            Change(displayID: 2, modeID: 90, scope: .session), Change(displayID: 2, modeID: 1, scope: .session),
+            Change(displayID: 2, modeID: 3, scope: .permanent),
+        ])
+        #expect(coordinator.pendingRestores.isEmpty)
+    }
+
+    @Test func keepsAWaitingRestoreWhenANewSwitchOfTheDisplayFails() {
+        tryModeThatMakesTheMonitorGoAway()
+        coordinator.apply(modeID: 3, to: 2, needsConfirmation: false)
+        #expect(coordinator.pendingRestores == [pending])
+    }
+
+    /// The countdown's timer ends the innermost modal alert, so no other alert may open
+    /// while it is up: screen changes wait until the switch is over.
+    @Test func showsNothingWhileAnotherDisplayIsOnTrial() {
+        tryModeThatMakesTheMonitorGoAway()
+        displays.refused = [1]
+        displays.comeBack(2)
+        clock.now += .seconds(121)
+        var seenDuringCountdown: (errors: [ResoluteError], waiting: Int)?
+        let (coordinator, reports) = (coordinator, reports)
+        countdown.answers.append {
+            coordinator.displaysDidChange()
+            coordinator.expireRestores()
+            seenDuringCountdown = (reports.errors, coordinator.pendingRestores.count)
             return .revert
         }
-        coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
-        #expect(reports.errors.isEmpty)
-        monitor.comeBack()
-        coordinator.displaysDidChange()
+        coordinator.apply(modeID: 91, to: 1, needsConfirmation: true)
+        #expect(seenDuringCountdown?.errors == [])
+        #expect(seenDuringCountdown?.waiting == 1)
         #expect(reports.errors == [.revertFailed(display: "DELL P2419H")])
         #expect(coordinator.pendingRestores.isEmpty)
     }

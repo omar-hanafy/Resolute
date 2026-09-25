@@ -7,14 +7,17 @@ import ResoluteKit
 ///
 /// A display that cannot show a mode may lose its link during the countdown. Its revert
 /// then waits for the display to come back, which `displaysDidChange()` hears about,
-/// without holding the main thread and without alerts while displays reconnect. After
-/// `restoreTimeout` the revert is given up; the mode lasts at most until logout.
+/// without holding the main thread and without alerts while the display is away. After
+/// `restoreTimeout` the revert gets one last try and is given up; the mode lasts at most
+/// until logout.
 @MainActor
 final class ModeChangeCoordinator {
     /// A revert waiting for its display, and when to stop waiting.
     private struct Waiting {
         var restore: ModeSwitcher.PendingRestore
         var deadline: ContinuousClock.Instant
+        /// Whether putting the mode back has failed yet; only the first failure is logged.
+        var hasFailed = false
     }
 
     private let service: any DisplayControlling
@@ -23,6 +26,11 @@ final class ModeChangeCoordinator {
     private let now: @MainActor () -> ContinuousClock.Instant
     private let restoreTimeout: Duration
     private var waiting: [CGDirectDisplayID: Waiting] = [:]
+    /// Switches under way. During one the Keep/Revert countdown may be up, and its timer
+    /// ends the innermost modal alert, so no other alert may open: screen changes are taken
+    /// up once the switch is over.
+    private var switchesUnderWay = 0
+    private var hasMissedChanges = false
 
     /// `decide` shows the Keep/Revert countdown and `report` an alert; tests pass their own,
     /// with their own clock.
@@ -50,52 +58,88 @@ final class ModeChangeCoordinator {
     }
 
     func apply(modeID: Int32, to displayID: CGDirectDisplayID, needsConfirmation: Bool) {
-        // Once the person picks a mode for the display, the one from before must not return.
-        if let replaced = waiting.removeValue(forKey: displayID) {
-            ResoluteLog.modes.notice("""
-                A new mode for \(replaced.restore.displayName, privacy: .public) replaces the restore \
-                of mode \(replaced.restore.modeID) that was waiting for it
-                """)
-        }
-        do {
-            let outcome = try ModeSwitcher(service: service).apply(modeID: modeID, to: displayID, trial: needsConfirmation) {
+        // A revert still waiting for this display goes first, so the new switch starts from
+        // the mode the person had rather than from the one on trial.
+        if waiting[displayID] != nil { attempt(displayID) }
+        switchesUnderWay += 1
+        let result = Result {
+            try ModeSwitcher(service: service).apply(modeID: modeID, to: displayID, trial: needsConfirmation) {
                 decide()
+            }
+        }
+        switchesUnderWay -= 1
+        switch result {
+        case .success(let outcome):
+            // The person's new choice replaces a revert that is still waiting.
+            if let replaced = waiting.removeValue(forKey: displayID) {
+                ResoluteLog.modes.notice("""
+                    A new mode for \(replaced.restore.displayName, privacy: .public) replaces the restore \
+                    of mode \(replaced.restore.modeID) that was waiting for it
+                    """)
             }
             if case .restorePending(let restore) = outcome {
                 wait(for: restore)
             }
-        } catch {
+        case .failure(let error):
             report(error)
+        }
+        if switchesUnderWay == 0, hasMissedChanges {
+            hasMissedChanges = false
+            displaysDidChange()
         }
     }
 
     /// Finishes the reverts whose display is back. Called when the screen configuration
     /// changes, as it does when a display reconnects.
     func displaysDidChange() {
-        giveUpOnExpiredRestores()
-        let switcher = ModeSwitcher(service: service)
+        guard switchesUnderWay == 0 else {
+            hasMissedChanges = true
+            return
+        }
         for displayID in waiting.keys {
-            // Taken out first: putting the mode back changes the screen configuration again,
-            // and an alert below lets this run again before it returns.
-            guard let entry = waiting.removeValue(forKey: displayID) else { continue }
-            do {
-                if try switcher.finish(entry.restore) == .waiting {
-                    waiting[displayID] = entry
-                }
-            } catch {
-                // The display is back, so it is not reconnecting any more.
-                report(error)
-            }
+            attempt(displayID)
         }
     }
 
-    /// Gives up on the reverts whose display has not come back in time.
-    func giveUpOnExpiredRestores() {
-        let switcher = ModeSwitcher(service: service)
-        for (displayID, entry) in waiting where now() >= entry.deadline {
-            waiting[displayID] = nil
-            switcher.giveUp(on: entry.restore, after: restoreTimeout)
+    /// Ends the waits that are due: each revert gets one last try, in case a screen change
+    /// was missed, and is then given up.
+    func expireRestores() {
+        guard switchesUnderWay == 0 else {
+            hasMissedChanges = true
+            return
         }
+        for (displayID, entry) in waiting where now() >= entry.deadline {
+            attempt(displayID)
+        }
+    }
+
+    /// Tries to finish the revert waiting for `displayID`. A display that refuses the mode
+    /// is tried again on the next change, since one that has only just come back may not
+    /// take a mode yet; once the wait is over, this was the last try.
+    private func attempt(_ displayID: CGDirectDisplayID) {
+        // Taken out first: putting the mode back changes the screen configuration again, and
+        // an alert below lets this run again before it returns.
+        guard var entry = waiting.removeValue(forKey: displayID) else { return }
+        let switcher = ModeSwitcher(service: service)
+        var failure: (any Error)?
+        do {
+            if try switcher.finish(entry.restore, logsFailures: !entry.hasFailed) != .waiting {
+                // A mode that never showed is reported once the display is back, as it is
+                // when the display stays.
+                if let notShown = entry.restore.failure { report(notShown) }
+                return
+            }
+        } catch {
+            failure = error
+            entry.hasFailed = true
+        }
+        guard now() >= entry.deadline else {
+            waiting[displayID] = entry
+            return
+        }
+        switcher.giveUp(on: entry.restore, after: restoreTimeout)
+        // A display that is back but refuses is shown; one that stayed away is only logged.
+        if let failure { report(failure) }
     }
 
     private func wait(for restore: ModeSwitcher.PendingRestore) {
@@ -103,7 +147,7 @@ final class ModeChangeCoordinator {
         waiting[restore.displayID] = Waiting(restore: restore, deadline: deadline)
         Task { [weak self] in
             try? await Task.sleep(until: deadline, clock: .continuous)
-            self?.giveUpOnExpiredRestores()
+            self?.expireRestores()
         }
     }
 }
