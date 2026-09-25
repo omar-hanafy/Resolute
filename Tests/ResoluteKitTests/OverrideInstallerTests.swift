@@ -160,6 +160,14 @@ import Testing
         #expect(AppleScript.doShellScript("ls", withAdministratorPrivileges: false) == #"do shell script "ls""#)
     }
 
+    @Test func recognisesOnlyTheCancelledPrompt() {
+        #expect(AdminCommandRunner.isCancellation("0:25: execution error: User canceled. (-128)"))
+        #expect(AdminCommandRunner.isCancellation("execution error: User canceled. (-128)\n"))
+        #expect(!AdminCommandRunner.isCancellation("mv: /L/x: No space left (-1280 bytes)"))
+        #expect(!AdminCommandRunner.isCancellation("execution error: rm failed with -128 files (-2700)"))
+        #expect(!AdminCommandRunner.isCancellation("execution error: The command exited with a non-zero status. (-12800)"))
+    }
+
     @Test func survivesARealAppleScriptRoundTrip() throws {
         // Runs osascript without administrator rights, so no password prompt appears.
         let root = try makeTemporaryDirectory()

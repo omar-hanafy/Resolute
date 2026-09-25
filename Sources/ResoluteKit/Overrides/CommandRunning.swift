@@ -26,10 +26,15 @@ public struct AdminCommandRunner: CommandRunning {
             try await Task.detached {
                 try Subprocess.run("/usr/bin/osascript", arguments: ["-e", source])
             }.value
-        } catch ResoluteError.commandFailed(_, let message) where message.contains("-128") {
-            // "User canceled. (-128)"
+        } catch ResoluteError.commandFailed(_, let message) where Self.isCancellation(message) {
             throw ResoluteError.cancelled
         }
+    }
+
+    /// True for osascript's report that the password prompt was cancelled:
+    /// "execution error: User canceled. (-128)". The code always ends the message.
+    static func isCancellation(_ message: String) -> Bool {
+        message.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("(-128)")
     }
 }
 
