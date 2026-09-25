@@ -31,7 +31,7 @@ make install
 
 If you used RDM, quit it and remove it from System Settings › General › Login Items. Resolute reads the override files RDM wrote.
 
-To uninstall, turn off Launch at Login in the menu, then run `make uninstall`.
+To uninstall, run `make uninstall`. It turns off Launch at Login, then removes the app and the command-line link.
 
 ## The menu
 
@@ -62,10 +62,13 @@ $ resolute displays --json
 
 `-d` takes `main`, an index from `resolute displays`, `id:<number>`, or part of a display's name. `resolute help <command>` explains the rest.
 
+With `--json`, vendor and product IDs are hex strings, the way `--vendor` and `--product` take them. `resolute --generate-completion-script zsh` (or `bash`, `fish`) prints shell completions.
+
 ## Custom resolutions
 
 macOS reads per-display override files from `/Library/Displays/Contents/Resources/Overrides`. The **Custom Resolutions…** window, and `resolute overrides`, edit the `scale-resolutions` list in those files, so you can add modes a display does not offer, such as 2560 × 1080 HiDPI on a 5120 × 2160 monitor.
 
+- The list shows every entry in the file. Adding a HiDPI resolution also adds a 1× entry at its rendered size, as RDM did, unless the list has one; removing the HiDPI entry removes that 1× entry only if it was added with it in the same edit.
 - Saving asks for an administrator password. The file being replaced is first copied to `/Library/Application Support/Resolute/Backups`.
 - New modes appear after you reconnect the display or restart the Mac.
 - On Apple silicon Macs, macOS may ignore custom scaled resolutions for some displays.
@@ -89,11 +92,14 @@ The macOS 27 record layout is documented in [docs/design/2026-09-25-resolute-des
 
 ```sh
 make build       # swift build
-make test        # unit tests (Swift Testing)
+make test        # unit tests (Swift Testing): the library, the command line and the editor
+make lint        # shellcheck on the scripts
 make live-test   # also switches the main display's refresh rate for a moment and back
 make app         # dist/Resolute.app and dist/resolute
 make icon        # regenerates Resources/AppIcon.icns
 ```
+
+[TESTING.md](TESTING.md) lists the checks that need a person and a screen. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
 
 `Resolute.app/Contents/MacOS/Resolute --dump-menu` prints the menu as it would appear, and `--render-editor file.png` captures the Custom Resolutions window without showing it (the terminal needs the Screen Recording permission).
 
