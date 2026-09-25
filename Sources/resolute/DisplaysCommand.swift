@@ -37,8 +37,9 @@ struct DisplaySummary: Encodable {
     let index: Int
     let id: UInt32
     let name: String
-    let vendorID: UInt32
-    let productID: UInt32
+    /// In hex, as `--vendor`, `--product` and override file names take them.
+    let vendorID: String
+    let productID: String
     let serialNumber: UInt32
     let isMain: Bool
     let isBuiltin: Bool
@@ -52,8 +53,8 @@ struct DisplaySummary: Encodable {
         self.index = index
         id = display.id
         name = display.name
-        vendorID = display.vendorID
-        productID = display.productID
+        vendorID = Output.hex(display.vendorID)
+        productID = Output.hex(display.productID)
         serialNumber = display.serialNumber
         isMain = display.isMain
         isBuiltin = display.isBuiltin
@@ -61,10 +62,6 @@ struct DisplaySummary: Encodable {
         currentMode = display.currentMode
         modeCount = display.modes.count
         hiddenModeCount = display.hiddenModeCount
-        switch display.privateModes {
-        case .trusted: hiddenModes = "available"
-        case .unavailable: hiddenModes = "unavailable"
-        case .untrusted(let reason): hiddenModes = "ignored: \(reason)"
-        }
+        hiddenModes = Output.hiddenModes(display)
     }
 }

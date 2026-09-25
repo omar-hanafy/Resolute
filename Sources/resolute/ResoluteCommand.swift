@@ -13,6 +13,57 @@ struct ResoluteCommand: AsyncParsableCommand {
         ],
         defaultSubcommand: DisplaysCommand.self
     )
+
+    static let commands = ["displays", "modes", "set", "mirror", "overrides"]
+
+    /// Catches a mistyped command first: `displays`, the default, would only report an
+    /// unexpected argument.
+    static func main() async {
+        if let message = unknownCommandMessage(for: Array(CommandLine.arguments.dropFirst())) {
+            FileHandle.standardError.write(Data("Error: \(message)\n".utf8))
+            Foundation.exit(ExitCode.validationFailure.rawValue)
+        }
+        await main(nil)
+    }
+
+    static func unknownCommandMessage(for arguments: [String]) -> String? {
+        guard let word = arguments.first, !word.hasPrefix("-"), word != "help", !commands.contains(word) else {
+            return nil
+        }
+        let problem = "“\(word)” is not a resolute command."
+        if word.lowercased() == "version" {
+            return problem + " Did you mean “resolute --version”?"
+        }
+        if let command = commands.first(where: { isTypo(word.lowercased(), of: $0) }) {
+            return problem + " Did you mean “resolute \(command)”?"
+        }
+        if Output.looksLikeSize(word), (try? ModeQuery(resolution: word)) != nil {
+            return problem + " To switch to that resolution, run “resolute set \(word)”."
+        }
+        return problem + " The commands are displays, modes, set, mirror and overrides."
+    }
+
+    /// Close enough to `command` to be a slip: a prefix of three or more letters, or at
+    /// most two letters wrong.
+    static func isTypo(_ word: String, of command: String) -> Bool {
+        if word.count >= 3, command.hasPrefix(word) || word.hasPrefix(command) { return true }
+        return editDistance(word, command) <= 2
+    }
+
+    static func editDistance(_ lhs: String, _ rhs: String) -> Int {
+        let left = Array(lhs), right = Array(rhs)
+        guard !left.isEmpty, !right.isEmpty else { return max(left.count, right.count) }
+        var previous = Array(0...right.count)
+        for i in 1...left.count {
+            var current = [i] + Array(repeating: 0, count: right.count)
+            for j in 1...right.count {
+                let substitution = previous[j - 1] + (left[i - 1] == right[j - 1] ? 0 : 1)
+                current[j] = min(previous[j] + 1, current[j - 1] + 1, substitution)
+            }
+            previous = current
+        }
+        return previous[right.count]
+    }
 }
 
 /// What a command talks to. `live` is the real system; tests pass their own.

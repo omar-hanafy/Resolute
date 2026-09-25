@@ -48,4 +48,24 @@ enum Output {
     static func hex(_ value: UInt32) -> String {
         String(value, radix: 16)
     }
+
+    /// True for text shaped like WIDTHxHEIGHT, as opposed to a stray word or number.
+    static func looksLikeSize(_ text: String) -> Bool {
+        text.lowercased().contains { $0 == "x" || $0 == "×" }
+    }
+
+    /// `text`, quoted for a shell when it needs to be.
+    static func shellWord(_ text: String) -> String {
+        let plain = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.:/@"))
+        return text.unicodeScalars.allSatisfy(plain.contains) && !text.isEmpty ? text : Shell.quote(text)
+    }
+
+    /// Whether hidden modes can be used on `display`, for JSON output.
+    static func hiddenModes(_ display: Display) -> String {
+        switch display.privateModes {
+        case .trusted: "available"
+        case .unavailable: "unavailable"
+        case .untrusted(let reason): "ignored: \(reason)"
+        }
+    }
 }

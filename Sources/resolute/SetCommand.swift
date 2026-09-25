@@ -8,7 +8,7 @@ struct SetCommand: ParsableCommand, ContextCommand {
         abstract: "Switch a display to another mode.",
         discussion: """
             Examples:
-              resolute set 1512x982          keep the refresh rate, pick the resolution
+              resolute set 1496x967          keep the refresh rate, pick the resolution
               resolute set 1920x1200@1x      a low-resolution (1×) mode
               resolute set --refresh 60      keep the resolution, change the refresh rate
               resolute set --mode-id 55      an exact mode from `resolute modes --raw`
@@ -46,8 +46,33 @@ struct SetCommand: ParsableCommand, ContextCommand {
     var dryRun = false
 
     func validate() throws {
-        if resolution == nil && scale == nil && refresh == nil && modeID == nil && !useDefault {
-            throw ValidationError("Give a resolution, --refresh, --scale, --mode-id or --default.")
+        if let refresh, !ModeQuery.isPlausible(refreshRate: refresh) {
+            throw ValidationError("--refresh takes a rate in hertz, for example 60 or 59.94.")
+        }
+        if let scale, !ModeQuery.isPlausible(scale: scale) {
+            throw ValidationError("--scale takes 2 for HiDPI or 1 for low resolution.")
+        }
+        if modeID != nil, resolution != nil || scale != nil || refresh != nil || useDefault {
+            throw ValidationError("--mode-id names one exact mode; leave out the resolution, --scale, --refresh and --default.")
+        }
+        if useDefault, resolution != nil || scale != nil || refresh != nil {
+            throw ValidationError("--default picks the display's default mode; leave out the resolution, --scale and --refresh.")
+        }
+        // Only something shaped like a size is checked here: a bare word or number is more
+        // likely the value of a mistyped option, which ArgumentParser reports after this.
+        if let resolution, Output.looksLikeSize(resolution) {
+            let parsed: ModeQuery
+            do {
+                parsed = try ModeQuery(resolution: resolution)
+            } catch {
+                throw ValidationError(error.localizedDescription)
+            }
+            if parsed.scale != nil, scale != nil {
+                throw ValidationError("Give the scale once, either as @2x or @1x in the resolution or with --scale.")
+            }
+            if parsed.refreshRate != nil, refresh != nil {
+                throw ValidationError("Give the refresh rate once, either as @60 in the resolution or with --refresh.")
+            }
         }
     }
 
@@ -56,9 +81,19 @@ struct SetCommand: ParsableCommand, ContextCommand {
     }
 
     func run(in context: CommandContext) throws {
+        // Checked here rather than in validate(): ArgumentParser validates before it
+        // reports unknown options, so this message would hide a mistyped one.
+        guard resolution != nil || scale != nil || refresh != nil || modeID != nil || useDefault else {
+            throw ResoluteError.usage("Give a resolution, --refresh, --scale, --mode-id or --default. See 'resolute help set'.")
+        }
         let service = context.service
         let display = try target.resolve(in: service.displays())
-        var query = try resolution.map { try ModeQuery(resolution: $0) } ?? ModeQuery()
+        var query: ModeQuery
+        do {
+            query = try resolution.map { try ModeQuery(resolution: $0) } ?? ModeQuery()
+        } catch ResoluteError.invalidResolution(let text) where Double(text) != nil {
+            throw ResoluteError.usage("“\(text)” is not a resolution. To change only the refresh rate, use --refresh \(text).")
+        }
         if let scale { query.scale = scale }
         if let refresh { query.refreshRate = refresh }
         query.modeID = modeID
@@ -76,14 +111,16 @@ struct SetCommand: ParsableCommand, ContextCommand {
         }
         // Hidden modes are tried for the session and kept only when confirmed.
         let trial = session || mode.origin == .hidden
-        let outcome = try ModeSwitcher(service: service).apply(modeID: mode.modeID, to: display.id, trial: trial) {
+        let switcher = ModeSwitcher(service: service)
+        let outcome = try switcher.apply(modeID: mode.modeID, to: display.id, trial: trial) {
             session ? .keepForSession : context.confirmHiddenMode()
         }
         switch outcome {
         case .alreadyCurrent:
             context.write("\(display.name) is already at \(Output.describe(mode)).")
         case .applied, .kept, .keptForSession:
-            guard service.currentModeID(of: display.id) == mode.modeID else {
+            // The full snapshot, since CoreGraphics may not name a hidden mode in use.
+            guard switcher.currentModeID(of: display.id) == mode.modeID else {
                 context.writeError("warning: macOS accepted the change but reports a different mode now.")
                 return
             }

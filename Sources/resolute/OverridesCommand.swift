@@ -7,12 +7,15 @@ struct OverridesCommand: AsyncParsableCommand {
         commandName: "overrides",
         abstract: "Inspect and edit custom resolutions in /Library/Displays.",
         discussion: """
+            Without --display, --vendor or --product, commands use the main display.
             Changes apply after the display is reconnected or the Mac restarts.
             Commands that write need administrator rights: run them with sudo.
             """,
         subcommands: [ListOverrides.self, ShowOverride.self, AddResolution.self, RemoveResolution.self, ResetOverride.self],
         defaultSubcommand: ListOverrides.self
     )
+
+    static let reconnectHint = "The change applies after you reconnect the display or restart the Mac."
 }
 
 /// Where overrides are read from and written to.
@@ -28,11 +31,17 @@ struct LocationOptions: ParsableArguments {
         guard root != nil || context.isRoot else { throw ResoluteError.needsRoot }
         return OverrideInstaller(locations: locations, runner: ShellCommandRunner())
     }
+
+    /// Held while a command reads, changes and writes an override, so commands that
+    /// overlap cannot lose each other's changes.
+    var lock: OverrideLock {
+        OverrideLock(file: locations.lockFile)
+    }
 }
 
 /// Which display's override to use.
 struct OverrideTargetOptions: ParsableArguments {
-    @Option(name: [.short, .long], help: "A connected display: main, an index, id:<number>, or part of its name.")
+    @Option(name: [.short, .long], help: "A connected display: main (the default), an index, id:<number>, or part of its name.")
     var display: String?
 
     @Option(help: "Vendor ID in hex, for a display that is not connected (for example db4).")
@@ -48,21 +57,43 @@ struct OverrideTargetOptions: ParsableArguments {
         if display != nil && vendor != nil {
             throw ValidationError("Pass either --display or --vendor and --product.")
         }
-    }
-
-    func key(in context: CommandContext) throws -> OverrideKey {
-        if let vendor, let product {
-            guard let vendorID = Self.hex(vendor), let productID = Self.hex(product) else {
-                throw ValidationError("--vendor and --product take hexadecimal IDs, for example db4 and 3401.")
-            }
-            return OverrideKey(vendorID: vendorID, productID: productID)
+        if let vendor, Self.hex(vendor) == nil {
+            throw ValidationError("--vendor takes a hexadecimal ID, for example db4.")
         }
-        let displays = context.service.displays()
-        return OverrideKey(display: try DisplaySelector(display ?? "main").resolve(in: displays))
+        if let product, Self.hex(product) == nil {
+            throw ValidationError("--product takes a hexadecimal ID, for example 3401.")
+        }
     }
 
-    private static func hex(_ text: String) -> UInt32? {
+    func target(in context: CommandContext) throws -> OverrideTarget {
+        let displays = context.service.displays()
+        if let vendor, let product, let vendorID = Self.hex(vendor), let productID = Self.hex(product) {
+            let key = OverrideKey(vendorID: vendorID, productID: productID)
+            return OverrideTarget(key: key, display: displays.first { OverrideKey(display: $0) == key })
+        }
+        let display = try DisplaySelector(display ?? "main").resolve(in: displays)
+        return OverrideTarget(key: OverrideKey(display: display), display: display)
+    }
+
+    /// These options as typed, to repeat them in a suggested command.
+    var arguments: String {
+        if let vendor, let product { return " --vendor \(vendor) --product \(product)" }
+        return display.map { " -d \(Output.shellWord($0))" } ?? ""
+    }
+
+    static func hex(_ text: String) -> UInt32? {
         UInt32(text.lowercased().hasPrefix("0x") ? String(text.dropFirst(2)) : text, radix: 16)
+    }
+}
+
+/// An override and the connected display it belongs to, if any.
+struct OverrideTarget: CustomStringConvertible {
+    var key: OverrideKey
+    var display: Display?
+
+    /// "Built-in Retina Display (vendor 610, product a050)", or "vendor db4, product 3401".
+    var description: String {
+        display.map { "\($0.name) (\(key))" } ?? key.description
     }
 }
 
@@ -76,6 +107,18 @@ struct EntryOptions: ParsableArguments {
 
     func entry(flags: HiDPIFlags? = nil) throws -> ScaleResolution {
         try ScaleResolution(parsing: resolution, standard: standard, flags: flags)
+    }
+
+    /// Reports a malformed entry as a usage error. Only something shaped like a size is
+    /// checked: a bare word is more likely the value of a mistyped option, which
+    /// ArgumentParser reports after validation.
+    func validate(flags: String? = nil) throws {
+        guard Output.looksLikeSize(resolution) else { return }
+        do {
+            _ = try entry(flags: try flags.map { try HiDPIFlags(parsing: $0) })
+        } catch {
+            throw ValidationError(error.localizedDescription)
+        }
     }
 }
 
@@ -126,17 +169,22 @@ struct ShowOverride: ParsableCommand, ContextCommand {
     }
 
     func run(in context: CommandContext) throws {
-        let key = try target.key(in: context)
+        let target = try target.target(in: context)
         let store = OverrideStore(locations: location.locations)
-        let (override, source) = try store.editableOverride(for: key)
-        let display = context.service.displays().first { OverrideKey(display: $0) == key }
-        let summary = OverrideSummary(key: key, override: override, source: source, locations: store.locations, display: display)
+        let (override, source) = try store.editableOverride(for: target.key)
+        let summary = OverrideSummary(
+            key: target.key, override: override, source: source, locations: store.locations, display: target.display
+        )
         context.write(json ? try Output.json(summary) : summary.text)
     }
 }
 
 struct AddResolution: AsyncParsableCommand, ContextCommand {
-    static let configuration = CommandConfiguration(commandName: "add", abstract: "Add a custom resolution to a display's override.")
+    static let configuration = CommandConfiguration(
+        commandName: "add",
+        abstract: "Add a custom resolution to a display's override.",
+        discussion: "A HiDPI entry comes with a 1× entry at its pixel size, as RDM wrote them, unless the override lists one."
+    )
 
     @OptionGroup var entry: EntryOptions
 
@@ -146,48 +194,77 @@ struct AddResolution: AsyncParsableCommand, ContextCommand {
     @OptionGroup var target: OverrideTargetOptions
     @OptionGroup var location: LocationOptions
 
+    func validate() throws {
+        try entry.validate(flags: flags)
+    }
+
     func run() async throws {
         try await run(in: .live)
     }
 
     func run(in context: CommandContext) async throws {
-        let installer = try location.installer(in: context)
-        let key = try target.key(in: context)
-        var draft = OverrideDraft(try OverrideStore(locations: location.locations).editableOverride(for: key).override)
         let newEntry = try entry.entry(flags: try flags.map { try HiDPIFlags(parsing: $0) })
-        try draft.add(newEntry)
-        let url = try await installer.install(draft.working)
-        context.write("Added \(newEntry.summary) to \(url.path(percentEncoded: false))")
-        context.write("Reconnect the display or restart the Mac to use it.")
+        let target = try target.target(in: context)
+        let installer = try location.installer(in: context)
+        try await location.lock.withLock {
+            var draft = OverrideDraft(try OverrideStore(locations: location.locations).editableOverride(for: target.key).override)
+            let alsoAdded = try draft.add(newEntry)
+            let url = try await installer.install(draft.working)
+            context.write("Added \(newEntry.summary) for \(target).")
+            for partner in alsoAdded {
+                context.write("Also added \(partner.summary), the 1× entry HiDPI entries are paired with.")
+            }
+            context.write("Saved \(url.path(percentEncoded: false))")
+            context.write(OverridesCommand.reconnectHint)
+        }
     }
 }
 
 struct RemoveResolution: AsyncParsableCommand, ContextCommand {
-    static let configuration = CommandConfiguration(commandName: "remove", abstract: "Remove a custom resolution from a display's override.")
+    static let configuration = CommandConfiguration(
+        commandName: "remove",
+        abstract: "Remove a custom resolution from a display's override."
+    )
 
     @OptionGroup var entry: EntryOptions
     @OptionGroup var target: OverrideTargetOptions
     @OptionGroup var location: LocationOptions
 
+    func validate() throws {
+        try entry.validate()
+    }
+
     func run() async throws {
         try await run(in: .live)
     }
 
     func run(in context: CommandContext) async throws {
-        let installer = try location.installer(in: context)
-        let key = try target.key(in: context)
-        guard let installed = try OverrideStore(locations: location.locations).installedOverride(for: key) else {
-            throw ResoluteError.invalidEntry("There is no installed override for \(key).")
-        }
         let unwanted = try entry.entry()
-        var draft = OverrideDraft(installed)
-        let matches = draft.working.resolutions.filter { $0.sameMode(as: unwanted) }
-        guard !matches.isEmpty else {
-            throw ResoluteError.invalidEntry("\(unwanted.sizeText) (\(unwanted.kindText)) is not in the override.")
+        let target = try target.target(in: context)
+        let installer = try location.installer(in: context)
+        try await location.lock.withLock {
+            guard let installed = try OverrideStore(locations: location.locations).installedOverride(for: target.key) else {
+                throw ResoluteError.invalidEntry("There is no custom override for \(target).")
+            }
+            var draft = OverrideDraft(installed)
+            let matches = draft.working.resolutions.filter { $0.sameMode(as: unwanted) }
+            guard !matches.isEmpty else {
+                throw ResoluteError.invalidEntry("\(unwanted.sizeText) \(unwanted.kindText) is not in the override for \(target).")
+            }
+            draft.remove(matches)
+            let url = try await installer.install(draft.working)
+            context.write("Removed \(unwanted.sizeText) \(unwanted.kindText) for \(target).")
+            // Entries read from a file are never removed implicitly; say what stays.
+            if case .hiDPI = unwanted, let pixels = unwanted.pixelSize,
+               draft.working.resolutions.contains(.standard(width: pixels.width, height: pixels.height)) {
+                context.write(
+                    "\(pixels.width) × \(pixels.height) 1× stays in the override. To remove it too: "
+                        + "resolute overrides remove \(pixels.width)x\(pixels.height)@1x\(self.target.arguments)"
+                )
+            }
+            context.write("Saved \(url.path(percentEncoded: false))")
+            context.write(OverridesCommand.reconnectHint)
         }
-        draft.remove(matches)
-        let url = try await installer.install(draft.working)
-        context.write("Removed \(unwanted.sizeText) (\(unwanted.kindText)) from \(url.path(percentEncoded: false))")
     }
 }
 
@@ -205,10 +282,20 @@ struct ResetOverride: AsyncParsableCommand, ContextCommand {
     }
 
     func run(in context: CommandContext) async throws {
+        let target = try target.target(in: context)
+        let file = location.locations.userFile(for: target.key).path(percentEncoded: false)
+        guard FileManager.default.fileExists(atPath: file) else {
+            context.write("There is no custom override for \(target), so there is nothing to remove.")
+            return
+        }
         let installer = try location.installer(in: context)
-        let key = try target.key(in: context)
-        try await installer.remove(key)
-        context.write("Removed the override for \(key). Backups are in \(installer.locations.backupRoot.path(percentEncoded: false))")
+        try await location.lock.withLock {
+            try await installer.remove(target.key)
+        }
+        context.write(
+            "Removed the override for \(target). A backup is in \(installer.locations.backupRoot.path(percentEncoded: false))"
+        )
+        context.write(OverridesCommand.reconnectHint)
     }
 }
 
@@ -254,8 +341,10 @@ struct OverrideSummary: Encodable {
     let vendorID: String
     let productID: String
     let path: String
+    /// "installed", "system" (the file macOS ships) or "missing".
     let source: String
     let connectedDisplay: String?
+    let connectedDisplayID: UInt32?
     let productName: String?
     let entries: [Entry]
     let problem: String?
@@ -269,12 +358,13 @@ struct OverrideSummary: Encodable {
             self.source = "installed"
         case .system:
             path = locations.systemFile(for: key).path(percentEncoded: false)
-            self.source = "macOS"
+            self.source = "system"
         case .missing:
             path = locations.userFile(for: key).path(percentEncoded: false)
-            self.source = "none"
+            self.source = "missing"
         }
         connectedDisplay = display?.name
+        connectedDisplayID = display?.id
         productName = override.productName
         entries = override.resolutions.map(Entry.init)
         self.problem = problem
@@ -298,7 +388,7 @@ struct OverrideSummary: Encodable {
     var text: String {
         let origin = switch source {
         case "installed": "installed"
-        case "macOS": "shipped with macOS, not installed"
+        case "system": "shipped with macOS, not installed"
         default: "no override yet"
         }
         var lines = [path]

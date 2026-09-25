@@ -27,7 +27,7 @@ struct ModesCommand: ParsableCommand, ContextCommand {
         let display = try target.resolve(in: context.service.displays())
         let modes = display.modes.filter { all || $0.origin == .system }
         if json {
-            context.write(try Output.json(modes))
+            context.write(try Output.json(ModeList(display: display, modes: modes)))
             return
         }
         context.write("\(display.name): \(modes.count) modes\(Self.hiddenNote(for: display, all: all))")
@@ -87,5 +87,22 @@ struct ModesCommand: ParsableCommand, ContextCommand {
                 mode.origin == .hidden ? "hidden" : "",
             ]
         }, indent: "  ")
+    }
+}
+
+/// A display's modes, for `modes --json`.
+struct ModeList: Encodable {
+    let display: String
+    let displayID: UInt32
+    let currentModeID: Int32?
+    let hiddenModes: String
+    let modes: [DisplayMode]
+
+    init(display: Display, modes: [DisplayMode]) {
+        self.display = display.name
+        displayID = display.id
+        currentModeID = display.currentModeID
+        hiddenModes = Output.hiddenModes(display)
+        self.modes = modes
     }
 }

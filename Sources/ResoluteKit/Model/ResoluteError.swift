@@ -20,6 +20,8 @@ public enum ResoluteError: Error, Equatable, Sendable {
     case commandFailed(status: Int32, message: String)
     case cancelled
     case needsRoot
+    /// A command-line mistake found after parsing.
+    case usage(String)
 }
 
 extension ResoluteError: LocalizedError {
@@ -61,6 +63,8 @@ extension ResoluteError: LocalizedError {
             message.isEmpty ? "The command failed with status \(status)." : message
         case .cancelled:
             "The operation was cancelled."
+        case .usage(let message):
+            message
         case .needsRoot:
             "Writing display overrides needs administrator rights. Run the command with sudo, or use the Resolute app."
         }
