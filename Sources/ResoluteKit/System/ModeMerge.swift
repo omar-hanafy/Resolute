@@ -4,6 +4,8 @@ import Foundation
 public enum ModeMerge {
     /// Adds private indexes and bit depths to the public modes, appends each hidden mode
     /// once, and works out the current mode when CoreGraphics reports one it does not list.
+    /// `currentPrivateIndex` counts only as a position in `records`: SkyLight can report
+    /// one from another list when the display changed or went away after they were read.
     public static func merge(
         systemModes: [DisplayMode],
         records: [PrivateModeRecord],
@@ -25,7 +27,7 @@ public enum ModeMerge {
         }
         var current = currentModeID
         let currentIsListed = current.map { id in modes.contains { $0.modeID == id } } ?? false
-        if !currentIsListed, let currentPrivateIndex,
+        if !currentIsListed, let currentPrivateIndex, records.indices.contains(Int(currentPrivateIndex)),
            let privateCurrent = modes.first(where: { $0.privateIndex == currentPrivateIndex }) {
             current = privateCurrent.modeID
         }

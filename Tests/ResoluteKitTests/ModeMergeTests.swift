@@ -63,6 +63,18 @@ import Testing
         #expect(merged.currentModeID == 0x1001)
     }
 
+    /// SkyLight can report an index from another list when the display changed or went
+    /// away after its records were read; only a position in `records` is trusted, even
+    /// when a stale hidden mode carries that index.
+    @Test func ignoresACurrentIndexOutsideTheRecords() {
+        let stale = record(index: 4, modeID: 0x3000, width: 3840, hz: 30)
+        let merged = ModeMerge.merge(
+            systemModes: systemModes, records: records, hidden: [records[3], stale],
+            currentModeID: nil, currentPrivateIndex: 4
+        )
+        #expect(merged.currentModeID == nil)
+    }
+
     @Test func switchesHiddenModesByPrivateIndex() {
         #expect(ModeMerge.privateIndex(ofHiddenMode: 0x2000, in: [records[3]]) == 3)
         #expect(ModeMerge.privateIndex(ofHiddenMode: 0x1000, in: [records[3]]) == nil)

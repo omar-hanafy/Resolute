@@ -71,6 +71,30 @@ import Testing
     }
 }
 
+/// Uses a display ID no display has, and no SkyLight, so nothing here can reach a real
+/// display.
+@Suite struct OfflineDisplayTests {
+    let offline: CGDirectDisplayID = 0x5E5E_5E5E
+
+    /// CoreGraphics answers -1 for an ID it has never seen, which is not 0, and 0 for a
+    /// display that went away.
+    @Test func countsOnlyAPositiveAnswerAsOnline() throws {
+        try #require(!SystemDisplayService.onlineDisplayIDs().contains(offline))
+        #expect(CGDisplayIsOnline(offline) != 0)
+        #expect(!SystemDisplayService.isOnline(offline))
+        for id in SystemDisplayService.onlineDisplayIDs() {
+            #expect(SystemDisplayService.isOnline(id))
+        }
+    }
+
+    @Test func refusesToSwitchADisplayThatIsNotOnline() throws {
+        try #require(!SystemDisplayService.onlineDisplayIDs().contains(offline))
+        #expect(throws: ResoluteError.displayNotFound("id:\(offline)")) {
+            try SystemDisplayService(skyLight: nil).apply(modeID: 1, to: offline, scope: .app)
+        }
+    }
+}
+
 @Suite struct ConfigurationScopeTests {
     @Test func mapsToCoreGraphicsOptions() {
         #expect(ConfigurationScope.permanent.option == .permanently)
