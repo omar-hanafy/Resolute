@@ -5,7 +5,8 @@ import ResoluteKit
 @MainActor
 enum ConfirmationPanel {
     /// Returns true only when the person chooses Keep before the countdown ends. Return
-    /// (the default button) reverts, which is the safe choice on an unreadable screen.
+    /// (the default button) and Escape revert, which is the safe choice on an unreadable
+    /// screen.
     static func keepNewMode(countdown: RevertCountdown) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Keep this display mode?"
@@ -25,9 +26,23 @@ enum ConfirmationPanel {
             }
         }
         RunLoop.main.add(timer, forMode: .modalPanel)
+        let keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard let answer = Self.response(to: event) else { return event }
+            NSApp.stopModal(withCode: answer)
+            return nil
+        }
         NSApp.activate()
         let response = alert.runModal()
         timer.invalidate()
+        if let keys { NSEvent.removeMonitor(keys) }
         return response == .alertSecondButtonReturn
+    }
+
+    /// What a key pressed in the alert answers, when the alert would not answer it
+    /// itself: NSAlert gives Escape only to a button titled Cancel, and here Escape must
+    /// revert (the first button), like Return.
+    static func response(to event: NSEvent) -> NSApplication.ModalResponse? {
+        let escape: UInt16 = 53
+        return event.type == .keyDown && event.keyCode == escape ? .alertFirstButtonReturn : nil
     }
 }

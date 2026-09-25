@@ -15,6 +15,8 @@ struct CustomResolutionsView: View {
             Group {
                 if model.draft != nil {
                     OverrideEditor(model: model)
+                } else if let reason = model.readFailure {
+                    UnreadableOverride(model: model, reason: reason)
                 } else {
                     ContentUnavailableView(
                         "No Display Selected",
@@ -92,11 +94,44 @@ private struct TargetRow: View {
     }
 }
 
+/// Stands in for the editor when the display's override can't be read, so the file can
+/// still be removed or found without the command line.
+private struct UnreadableOverride: View {
+    let model: CustomResolutionsModel
+    let reason: String
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("The Override Can't Be Read", systemImage: "exclamationmark.triangle")
+        } description: {
+            Text(reason)
+        } actions: {
+            if model.source == .installed {
+                InstalledOverrideActions(model: model)
+            }
+        }
+    }
+}
+
+/// Remove Override… and Show in Finder, for an override file under the user root.
+private struct InstalledOverrideActions: View {
+    let model: CustomResolutionsModel
+    @State private var isConfirmingRemoval = false
+
+    var body: some View {
+        Button("Remove Override…", role: .destructive) { isConfirmingRemoval = true }
+            .confirmationDialog("Remove the custom override for this display?", isPresented: $isConfirmingRemoval) {
+                Button("Remove Override", role: .destructive) { Task { await model.removeOverride() } }
+            } message: {
+                Text("macOS goes back to the display's default resolutions after you reconnect it or restart. A backup is kept.")
+            }
+        Button("Show in Finder") { model.revealInFinder() }
+    }
+}
+
 private struct OverrideEditor: View {
     @Bindable var model: CustomResolutionsModel
-    @State private var tableSelection = Set<Int>()
     @State private var isAdding = false
-    @State private var isConfirmingRemoval = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -115,7 +150,7 @@ private struct OverrideEditor: View {
                     .textFieldStyle(.roundedBorder)
             }
 
-            Table(model.rows, selection: $tableSelection) {
+            Table(model.rows, selection: $model.selectedEntries) {
                 TableColumn("Resolution") { row in Text(row.resolution).monospacedDigit() }
                 TableColumn("Type") { row in Text(row.kind) }
                     .width(min: 60, ideal: 80)
@@ -125,6 +160,8 @@ private struct OverrideEditor: View {
                 TableColumn("Aspect Ratio") { row in Text(row.aspectRatio).foregroundStyle(.secondary) }
                     .width(min: 70, ideal: 90)
             }
+            // Delete does what the Remove button does; nil turns it off while saving.
+            .onDeleteCommand(perform: model.canRemoveSelection ? { model.removeSelection() } : nil)
             .overlay {
                 if model.rows.isEmpty {
                     ContentUnavailableView(
@@ -142,12 +179,11 @@ private struct OverrideEditor: View {
                     Label("Add Resolution", systemImage: "plus")
                 }
                 Button {
-                    model.remove(rows: tableSelection)
-                    tableSelection.removeAll()
+                    model.removeSelection()
                 } label: {
                     Label("Remove", systemImage: "minus")
                 }
-                .disabled(tableSelection.isEmpty)
+                .disabled(!model.canRemoveSelection)
                 Spacer()
             }
 
@@ -161,8 +197,7 @@ private struct OverrideEditor: View {
 
             HStack {
                 if model.source == .installed {
-                    Button("Remove Override…", role: .destructive) { isConfirmingRemoval = true }
-                    Button("Show in Finder") { model.revealInFinder() }
+                    InstalledOverrideActions(model: model)
                 }
                 Spacer()
                 if model.isWorking {
@@ -179,14 +214,6 @@ private struct OverrideEditor: View {
         .padding(20)
         .sheet(isPresented: $isAdding) {
             AddResolutionSheet(model: model)
-        }
-        .confirmationDialog("Remove the custom override for this display?", isPresented: $isConfirmingRemoval) {
-            Button("Remove Override", role: .destructive) { Task { await model.removeOverride() } }
-        } message: {
-            Text("macOS goes back to the display's default resolutions after you reconnect it or restart. A backup is kept.")
-        }
-        .onChange(of: model.selection) {
-            tableSelection.removeAll()
         }
     }
 }

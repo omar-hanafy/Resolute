@@ -70,6 +70,19 @@ struct GatedRunner: CommandRunning {
         return url
     }
 
+    func write(_ override: DisplayOverride, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try override.propertyListData().write(to: url)
+    }
+
+    /// Writes `override` where the staged store looks for an installed one.
+    func install(_ override: DisplayOverride, under root: URL) throws {
+        try write(override, to: OverrideLocations.staged(at: root).userFile(for: override.key))
+    }
+
+    let hd = ScaleResolution.hiDPI(width: 1920, height: 1080, flags: .standard)
+    let qhd = ScaleResolution.hiDPI(width: 2560, height: 1440, flags: .standard)
+
     @Test func switchesFreelyWithoutChanges() throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -83,7 +96,7 @@ struct GatedRunner: CommandRunning {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let model = makeModel(root: root, displays: StubDisplays([first, second]))
-        #expect(model.add(width: 1920, height: 1080, hiDPI: true, flags: .standard) == nil)
+        #expect(model.add(.hiDPI(width: 1920, height: 1080, flags: .standard)) == nil)
         model.requestSelection(OverrideKey(display: second))
         #expect(model.selection == OverrideKey(display: first))
         #expect(model.pendingSelection == OverrideKey(display: second))
@@ -103,7 +116,7 @@ struct GatedRunner: CommandRunning {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let model = makeModel(root: root, displays: StubDisplays([first, second]))
-        _ = model.add(width: 1920, height: 1080, hiDPI: true, flags: .standard)
+        _ = model.add(.hiDPI(width: 1920, height: 1080, flags: .standard))
         model.select(displayID: second.id)
         #expect(model.selection == OverrideKey(display: first))
         #expect(model.pendingSelection == OverrideKey(display: second))
@@ -114,7 +127,7 @@ struct GatedRunner: CommandRunning {
         defer { try? FileManager.default.removeItem(at: root) }
         let displays = StubDisplays([first, second])
         let model = makeModel(root: root, displays: displays)
-        _ = model.add(width: 1920, height: 1080, hiDPI: true, flags: .standard)
+        _ = model.add(.hiDPI(width: 1920, height: 1080, flags: .standard))
         displays.set([second])
         model.reloadTargets()
         #expect(model.selection == OverrideKey(display: first))
@@ -127,12 +140,12 @@ struct GatedRunner: CommandRunning {
         defer { try? FileManager.default.removeItem(at: root) }
         let gate = Gate()
         let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: GatedRunner(gate: gate))
-        _ = model.add(width: 1920, height: 1080, hiDPI: true, flags: .standard)
+        _ = model.add(.hiDPI(width: 1920, height: 1080, flags: .standard))
         let written = try #require(model.draft?.working)
 
         let save = Task { await model.save() }
         while !model.isWorking { await Task.yield() }
-        #expect(model.add(width: 2560, height: 1440, hiDPI: true, flags: .standard) != nil)
+        #expect(model.add(.hiDPI(width: 2560, height: 1440, flags: .standard)) != nil)
         model.productName = "Renamed"
         model.revert()
         model.requestSelection(OverrideKey(display: second))
@@ -144,6 +157,175 @@ struct GatedRunner: CommandRunning {
         #expect(!model.hasChanges)
         let stored = try OverrideStore(locations: .staged(at: root)).installedOverride(for: OverrideKey(display: first))
         #expect(stored?.resolutions == written.resolutions)
+    }
+
+    // MARK: - Selection
+
+    /// Rows used to be selected by position, so once an add re-sorted the list the
+    /// selection sat on another entry, and Remove deleted that one.
+    @Test func removesTheSelectedEntryAfterTheListIsResorted() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        _ = model.add(hd)
+        model.selectedEntries = [hd]
+        _ = model.add(qhd)
+        #expect(model.rows.map(\.entry) == [
+            .standard(width: 5120, height: 2880), .standard(width: 3840, height: 2160), qhd, hd,
+        ])
+        #expect(model.selectedEntries == [hd])
+
+        model.removeSelection()
+        // The 1× partner added with the entry goes with it; nothing else does.
+        #expect(model.rows.map(\.entry) == [.standard(width: 5120, height: 2880), qhd])
+        #expect(model.selectedEntries.isEmpty)
+    }
+
+    @Test func revertClearsTheSelection() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let native = ScaleResolution.standard(width: 2560, height: 1440)
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [native]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        _ = model.add(hd)
+        model.selectedEntries = [native, hd]
+
+        model.revert()
+        #expect(model.selectedEntries.isEmpty)
+        model.removeSelection()
+        #expect(model.rows.map(\.entry) == [native])
+    }
+
+    @Test func switchingDisplaysClearsTheSelection() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for display in [first, second] {
+            try install(DisplayOverride(key: OverrideKey(display: display), resolutions: [hd]), under: root)
+        }
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        model.selectedEntries = [hd]
+
+        model.requestSelection(OverrideKey(display: second))
+        #expect(model.selectedEntries.isEmpty)
+        model.removeSelection()
+        #expect(model.rows.map(\.entry) == [hd])
+    }
+
+    /// Remove and Delete share this: offered for a selection, and never while saving.
+    @Test func removingTheSelectionWaitsForTheSave() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = Gate()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: GatedRunner(gate: gate))
+        _ = model.add(hd)
+        #expect(!model.canRemoveSelection)
+        model.selectedEntries = [hd]
+        #expect(model.canRemoveSelection)
+
+        let save = Task { await model.save() }
+        while !model.isWorking { await Task.yield() }
+        #expect(!model.canRemoveSelection)
+        model.removeSelection()
+        #expect(model.rows.map(\.entry) == [.standard(width: 3840, height: 2160), hd])
+
+        await gate.open()
+        await save.value
+        #expect(model.canRemoveSelection)
+    }
+
+    /// After Remove Override… the list is read again, here from Apple's file, which has
+    /// the entry that was selected.
+    @Test func readingTheOverrideAgainClearsTheSelection() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try write(DisplayOverride(key: key, resolutions: [hd]), to: OverrideLocations.staged(at: root).systemFile(for: key))
+        try install(DisplayOverride(key: key, resolutions: [qhd, hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        model.selectedEntries = [hd]
+
+        await model.removeOverride()
+        #expect(model.source == .system)
+        #expect(model.rows.map(\.entry) == [hd])
+        #expect(model.selectedEntries.isEmpty)
+    }
+
+    // MARK: - Unreadable overrides
+
+    enum Breakage: CaseIterable, Sendable {
+        case notAPropertyList, folder, noPermission
+
+        /// Root can read any file, so there the permission case cannot be staged.
+        static var stageable: [Breakage] { geteuid() == 0 ? [.notAPropertyList, .folder] : allCases }
+    }
+
+    /// Puts an override file at `url` that cannot be read.
+    func stageUnreadable(_ breakage: Breakage, at url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        switch breakage {
+        case .notAPropertyList:
+            try Data("<plist><dict><key>broken".utf8).write(to: url)
+        case .folder:
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        case .noPermission:
+            try DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]).propertyListData().write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path(percentEncoded: false))
+        }
+    }
+
+    @Test(arguments: Breakage.stageable)
+    func showsAnUnreadableOverrideInPlace(_ breakage: Breakage) throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        let file = OverrideLocations.staged(at: root).userFile(for: key)
+        try stageUnreadable(breakage, at: file)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+
+        #expect(model.selection == key)
+        #expect(model.draft == nil)
+        #expect(model.readFailure?.contains(file.path(percentEncoded: false)) == true)
+        // What Remove Override… and Show in Finder act on.
+        #expect(model.source == .installed)
+        #expect(model.notice == nil)
+    }
+
+    @Test func removingAnUnreadableOverrideLoadsTheDisplay() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        let locations = OverrideLocations.staged(at: root)
+        try stageUnreadable(.notAPropertyList, at: locations.userFile(for: key))
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+
+        await model.removeOverride()
+        #expect(!FileManager.default.fileExists(atPath: locations.userFile(for: key).path(percentEncoded: false)))
+        let backups = locations.backupRoot.appending(path: key.vendorDirectoryName, directoryHint: .isDirectory)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: backups.path(percentEncoded: false)).count == 1)
+        #expect(model.readFailure == nil)
+        #expect(model.draft != nil)
+        #expect(model.source == .missing)
+        #expect(model.targets.first { $0.key == key }?.hasOverride == false)
+    }
+
+    /// Apple's file is not Resolute's to remove, even after showing a display whose
+    /// installed override could be removed.
+    @Test func offersNoRemovalForAnUnreadableSystemOverride() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let locations = OverrideLocations.staged(at: root)
+        let secondKey = OverrideKey(display: second)
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        try stageUnreadable(.folder, at: locations.systemFile(for: secondKey))
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        #expect(model.source == .installed)
+
+        model.requestSelection(secondKey)
+        #expect(model.readFailure?.contains(locations.systemFile(for: secondKey).path(percentEncoded: false)) == true)
+        #expect(model.source == .system)
+        await model.removeOverride()
+        #expect(model.notice == nil)
+        #expect(FileManager.default.fileExists(atPath: locations.systemFile(for: secondKey).path(percentEncoded: false)))
     }
 }
 
@@ -178,5 +360,29 @@ struct GatedRunner: CommandRunning {
     ])
     func rejectsWhatIsNotASize(width: String, height: String) {
         #expect(ResolutionInput.size(width: width, height: height) == nil)
+    }
+
+    /// The flags field is hidden for 1× entries, so whatever was left in it must not
+    /// stop one being added.
+    @Test func ignoresTheFlagsOfA1xEntry() throws {
+        let entry = try ResolutionInput.entry(width: "2560", height: "1440", hiDPI: false, flags: "left over")
+        #expect(entry == .standard(width: 2560, height: 1440))
+    }
+
+    @Test func readsTheFlagsOfAHiDPIEntry() throws {
+        let entry = try ResolutionInput.entry(width: "1920", height: "1080", hiDPI: true, flags: "0000000b 00a00000")
+        #expect(entry == .hiDPI(width: 1920, height: 1080, flags: HiDPIFlags(primary: 0xB, secondary: 0xA0_0000)))
+    }
+
+    @Test func rejectsBadFlagsForAHiDPIEntry() {
+        #expect(throws: ResoluteError.invalidFlags("left over")) {
+            try ResolutionInput.entry(width: "1920", height: "1080", hiDPI: true, flags: "left over")
+        }
+    }
+
+    @Test func rejectsAnEntryWithoutASize() {
+        #expect(throws: ResoluteError.self) {
+            try ResolutionInput.entry(width: "19x0", height: "1080", hiDPI: false, flags: "")
+        }
     }
 }
