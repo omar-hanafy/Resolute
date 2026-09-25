@@ -169,11 +169,11 @@ struct RemoveResolution: AsyncParsableCommand {
         }
         let unwanted = try entry.entry()
         var draft = OverrideDraft(installed)
-        let offsets = IndexSet(draft.working.resolutions.indices.filter { draft.working.resolutions[$0].sameMode(as: unwanted) })
-        guard !offsets.isEmpty else {
+        let matches = draft.working.resolutions.filter { $0.sameMode(as: unwanted) }
+        guard !matches.isEmpty else {
             throw ResoluteError.invalidEntry("\(unwanted.sizeText) (\(unwanted.kindText)) is not in the override.")
         }
-        draft.remove(atOffsets: offsets)
+        draft.remove(matches)
         let url = try await installer.install(draft.working)
         print("Removed \(unwanted.sizeText) (\(unwanted.kindText)) from \(url.path(percentEncoded: false))")
     }

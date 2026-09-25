@@ -4,6 +4,10 @@ import Foundation
 public struct OverrideDraft: Equatable, Sendable {
     public private(set) var saved: DisplayOverride
     public var working: DisplayOverride
+    /// 1× entries `add` put in to go with a HiDPI entry, keyed by that entry. Removing the
+    /// HiDPI entry removes its partner too, but only when this draft added it: a file cannot
+    /// say why a 1× entry is there, so entries read from one are never removed implicitly.
+    private var partners: [ScaleResolution: ScaleResolution] = [:]
 
     public init(_ override: DisplayOverride) {
         saved = override
@@ -12,53 +16,47 @@ public struct OverrideDraft: Equatable, Sendable {
 
     public var hasChanges: Bool { working != saved }
 
-    /// Adds an entry after checking it is sensible and not already listed.
-    ///
-    /// A HiDPI entry is written together with a 1× entry at its pixel size, and a file read
-    /// back lists that pair as the HiDPI entry alone. So a 1× entry some HiDPI entry already
-    /// writes is refused, and a 1× entry the new HiDPI entry will write is folded into it:
-    /// the list then shows what reopening the saved file will show. Returns the folded entries.
+    /// Adds an entry after checking it is sensible and not already listed. A HiDPI entry is
+    /// paired with a 1× entry at its pixel size, as RDM wrote them, unless the list has one.
+    /// Returns the entries added besides `entry`.
     @discardableResult
     public mutating func add(_ entry: ScaleResolution) throws -> [ScaleResolution] {
         try Self.validate(entry)
         if working.resolutions.contains(where: { $0.sameMode(as: entry) }) {
             throw ResoluteError.invalidEntry("\(entry.sizeText) (\(entry.kindText)) is already in the list.")
         }
-        if let writer = hiDPIEntry(writing: entry) {
-            throw ResoluteError.invalidEntry(
-                "\(entry.sizeText) (1×) is already there: it is written with the HiDPI entry \(writer.sizeText)."
-            )
-        }
-        var folded: [ScaleResolution] = []
+        var alsoAdded: [ScaleResolution] = []
         if case .hiDPI = entry, let pixels = entry.pixelSize {
-            folded = working.resolutions.filter { $0 == .standard(width: pixels.width, height: pixels.height) }
-            working.resolutions.removeAll { folded.contains($0) }
+            let partner = ScaleResolution.standard(width: pixels.width, height: pixels.height)
+            if !working.resolutions.contains(where: { $0.sameMode(as: partner) }) {
+                alsoAdded.append(partner)
+                partners[entry] = partner
+            }
         }
-        working.resolutions.append(entry)
-        return folded
+        working.resolutions = ScaleResolutionCodec.canonicalOrder(working.resolutions + [entry] + alsoAdded)
+        return alsoAdded
     }
 
-    /// The HiDPI entry that writes the 1× `entry` as its backing, if there is one.
-    public func hiDPIEntry(writing entry: ScaleResolution) -> ScaleResolution? {
-        guard case .standard(let width, let height) = entry else { return nil }
-        return working.resolutions.first { candidate in
-            guard case .hiDPI = candidate, let pixels = candidate.pixelSize else { return false }
-            return pixels.width == width && pixels.height == height
+    /// Removes `entries`, and the 1× entries this draft added to go with them.
+    public mutating func remove(_ entries: [ScaleResolution]) {
+        var unwanted = Set(entries)
+        for entry in entries {
+            if let partner = partners.removeValue(forKey: entry) { unwanted.insert(partner) }
         }
-    }
-
-    public mutating func remove(atOffsets offsets: IndexSet) {
-        for index in offsets.sorted(by: >) where working.resolutions.indices.contains(index) {
-            working.resolutions.remove(at: index)
-        }
+        // A partner removed by hand is no longer this draft's to remove later.
+        partners = partners.filter { !unwanted.contains($0.value) }
+        working.resolutions.removeAll { unwanted.contains($0) }
     }
 
     public mutating func revert() {
         working = saved
+        partners = [:]
     }
 
+    /// After a save every entry is in the file, so none is removed implicitly any more.
     public mutating func markSaved() {
         saved = working
+        partners = [:]
     }
 
     /// The largest pixel size Resolute writes to an override.

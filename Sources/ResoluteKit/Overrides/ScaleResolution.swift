@@ -163,49 +163,46 @@ public enum PreservedEntry: Hashable, Sendable {
     }
 }
 
-/// Reads and writes `scale-resolutions` arrays.
+/// Reads and writes `scale-resolutions` arrays. What is listed is exactly what is written,
+/// so an override reads back the way it was saved.
 public enum ScaleResolutionCodec {
+    /// Every element, once, in `canonicalOrder`.
     public static func decode(_ elements: [Any]) -> [ScaleResolution] {
-        var entries = elements.map(decodeElement)
-        // A 1× entry at a HiDPI entry's pixel size only backs that entry; `encode` recreates it.
-        let backingSizes = Set(entries.compactMap { entry -> PixelSize? in
-            guard case .hiDPI(let width, let height, _) = entry else { return nil }
-            return PixelSize(width: width * 2, height: height * 2)
-        })
-        entries.removeAll { entry in
-            guard case .standard(let width, let height) = entry else { return false }
-            return backingSizes.contains(PixelSize(width: width, height: height))
-        }
         var seen = Set<ScaleResolution>()
-        return entries.filter { seen.insert($0).inserted }
+        return canonicalOrder(elements.map(decodeElement).filter { seen.insert($0).inserted })
     }
 
-    /// 1× entries, then the 1× entries that back HiDPI entries, then HiDPI entries (each
-    /// largest first, as RDM wrote them), then preserved elements in their original order.
+    /// The elements for `entries`, in `canonicalOrder`.
     public static func encode(_ entries: [ScaleResolution]) -> [Any] {
-        var standard: [PixelSize] = []
-        var hiDPI: [(size: PixelSize, flags: HiDPIFlags)] = []
-        var preserved: [Any] = []
-        for entry in entries {
+        canonicalOrder(entries).map { entry -> Any in
             switch entry {
-            case .standard(let width, let height): standard.append(PixelSize(width: width, height: height))
-            case .hiDPI(let width, let height, let flags): hiDPI.append((PixelSize(width: width, height: height), flags))
-            case .preserved(let element): preserved.append(element.propertyListValue)
+            case .standard(let width, let height):
+                data([UInt32(width), UInt32(height)])
+            case .hiDPI(let width, let height, let flags):
+                data([UInt32(width * 2), UInt32(height * 2), flags.primary, flags.secondary])
+            case .preserved(let element):
+                element.propertyListValue
             }
         }
-        standard.sort(by: PixelSize.largerFirst)
-        hiDPI.sort { PixelSize.largerFirst($0.size, $1.size) }
-        var written = Set(standard)
-        var backing: [PixelSize] = []
-        for entry in hiDPI {
-            let size = PixelSize(width: entry.size.width * 2, height: entry.size.height * 2)
-            if written.insert(size).inserted { backing.append(size) }
+    }
+
+    /// 1× entries, then HiDPI entries, each largest first as RDM wrote them, then the
+    /// elements Resolute does not interpret, in their original order.
+    public static func canonicalOrder(_ entries: [ScaleResolution]) -> [ScaleResolution] {
+        func rank(_ entry: ScaleResolution) -> Int {
+            switch entry {
+            case .standard: 0
+            case .hiDPI: 1
+            case .preserved: 2
+            }
         }
-        let standardData: [Any] = (standard + backing).map { data([UInt32($0.width), UInt32($0.height)]) }
-        let hiDPIData: [Any] = hiDPI.map {
-            data([UInt32($0.size.width * 2), UInt32($0.size.height * 2), $0.flags.primary, $0.flags.secondary])
-        }
-        return standardData + hiDPIData + preserved
+        return entries.enumerated().sorted { lhs, rhs in
+            if rank(lhs.element) != rank(rhs.element) { return rank(lhs.element) < rank(rhs.element) }
+            if let left = lhs.element.pixelSize, let right = rhs.element.pixelSize, left != right {
+                return (left.width, left.height) > (right.width, right.height)
+            }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
     }
 
     static func decodeElement(_ element: Any) -> ScaleResolution {
@@ -243,14 +240,5 @@ public enum ScaleResolutionCodec {
             bytes += [UInt8(word >> 24), UInt8(word >> 16 & 0xFF), UInt8(word >> 8 & 0xFF), UInt8(word & 0xFF)]
         }
         return Data(bytes)
-    }
-}
-
-struct PixelSize: Hashable, Sendable {
-    var width: Int
-    var height: Int
-
-    static func largerFirst(_ lhs: PixelSize, _ rhs: PixelSize) -> Bool {
-        (lhs.width, lhs.height) > (rhs.width, rhs.height)
     }
 }

@@ -9,6 +9,7 @@ import Testing
         let override = try DisplayOverride(key: rdmKey, propertyList: Data(rdmOverrideXML.utf8))
         #expect(override.productName == nil)
         #expect(override.resolutions == [
+            .standard(width: 5120, height: 2160),
             .hiDPI(width: 2560, height: 1080, flags: HiDPIFlags(primary: 0xB, secondary: 0x00A0_0000)),
         ])
         #expect(override.otherKeys.keys == ["target-default-ppmm"])
@@ -49,17 +50,20 @@ import Testing
         #expect(encoded[3] as? Int == 32_768_800)
     }
 
-    @Test func recognisesHiDPIEntriesAndTheirBackingEntries() {
+    /// A 1× entry at a HiDPI entry's pixel size is listed too: the file cannot say whether
+    /// someone added it or it was written to go with the HiDPI entry.
+    @Test func listsEveryEntryOneTimesFirst() {
         let hiDPI = hexData("00000a00 00000640 00000001 00200000")
-        let backing = hexData("00000a00 00000640")
+        let pairedOneTimes = hexData("00000a00 00000640")
         let other = hexData("00000780 00000438")
-        #expect(ScaleResolutionCodec.decode([backing, hiDPI, other]) == [
-            .hiDPI(width: 1280, height: 800, flags: HiDPIFlags(primary: 1, secondary: 0x0020_0000)),
+        #expect(ScaleResolutionCodec.decode([hiDPI, other, pairedOneTimes]) == [
+            .standard(width: 2560, height: 1600),
             .standard(width: 1920, height: 1080),
+            .hiDPI(width: 1280, height: 800, flags: HiDPIFlags(primary: 1, secondary: 0x0020_0000)),
         ])
     }
 
-    @Test func writesStandardThenBackingThenHiDPIEntries() {
+    @Test func writesExactlyTheListedEntriesOneTimesFirstLargestFirst() {
         let encoded = ScaleResolutionCodec.encode([
             .hiDPI(width: 1280, height: 720, flags: .standard),
             .standard(width: 1920, height: 1080),
@@ -67,9 +71,8 @@ import Testing
             .standard(width: 2560, height: 1440),
         ]).compactMap { ($0 as? Data).map { $0.map { String(format: "%02x", $0) }.joined() } }
         #expect(encoded == [
-            "00000a00000005a0",                  // 2560×1440 at 1× (also backs 1280×720 HiDPI)
+            "00000a00000005a0",                  // 2560×1440 at 1×
             "0000078000000438",                  // 1920×1080 at 1×
-            "00000f0000000870",                  // backs 1920×1080 HiDPI
             "00000f00000008700000000900a00000",  // 1920×1080 HiDPI
             "00000a00000005a00000000900a00000",  // 1280×720 HiDPI
         ])
@@ -119,7 +122,7 @@ import Testing
         #expect(written["DisplayVendorID"] as? Int == 4268)
         #expect(written["IODisplayEDID"] as? Data == Data([0, 255, 255]))
         #expect(written["DisplayProductName"] as? String == "DELL U2720Q")
-        #expect((written["scale-resolutions"] as? [Data])?.count == 3)
+        #expect((written["scale-resolutions"] as? [Data])?.count == 2)
         #expect(written["target-default-ppmm"] as? Double == 10.01)
     }
 
@@ -188,7 +191,7 @@ import Testing
         try write(String(decoding: systemData, as: UTF8.self), to: store.locations.systemFile(for: key))
         let (override, source) = try store.editableOverride(for: key)
         #expect(source == .installed)
-        #expect(override.resolutions.count == 1)
+        #expect(override.resolutions.count == 2)  // RDM's 5120 × 2160 1× entry and its HiDPI entry
     }
 
     @Test func fallsBackToTheSystemOverrideThenToNothing() throws {

@@ -246,41 +246,73 @@ import Testing
         }
     }
 
-    @Test func refusesA1xEntryThatAHiDPIEntryAlreadyWrites() {
-        var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [.hiDPI(width: 1280, height: 720, flags: .standard)]))
-        let expected = ResoluteError.invalidEntry(
-            "2560 × 1440 (1×) is already there: it is written with the HiDPI entry 1280 × 720."
-        )
-        #expect(throws: expected) {
-            try draft.add(.standard(width: 2560, height: 1440))
-        }
-    }
-
-    @Test func foldsA1xEntryIntoTheHiDPIEntryThatNowWritesIt() throws {
-        var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [
-            .standard(width: 2560, height: 1440), .standard(width: 1920, height: 1080),
-        ]))
-        let folded = try draft.add(.hiDPI(width: 1280, height: 720, flags: .standard))
-        #expect(folded == [.standard(width: 2560, height: 1440)])
+    @Test func addsTheOneTimesEntryAHiDPIEntryIsPairedWith() throws {
+        var draft = OverrideDraft(DisplayOverride(key: key))
+        let alsoAdded = try draft.add(.hiDPI(width: 1280, height: 720, flags: .standard))
+        #expect(alsoAdded == [.standard(width: 2560, height: 1440)])
         #expect(draft.working.resolutions == [
-            .standard(width: 1920, height: 1080), .hiDPI(width: 1280, height: 720, flags: .standard),
+            .standard(width: 2560, height: 1440), .hiDPI(width: 1280, height: 720, flags: .standard),
         ])
     }
 
-    @Test func listsWhatAReloadWouldList() throws {
+    @Test func pairsANewHiDPIEntryWithAnExistingOneTimesEntry() throws {
         var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [.standard(width: 2560, height: 1440)]))
-        try draft.add(.hiDPI(width: 1280, height: 720, flags: .standard))
-        try draft.add(.standard(width: 1920, height: 1080))
-        #expect(throws: ResoluteError.self) { try draft.add(.standard(width: 2560, height: 1440)) }
-        let reloaded = try DisplayOverride(key: key, propertyList: draft.working.propertyListData())
-        #expect(Set(reloaded.resolutions) == Set(draft.working.resolutions))
+        #expect(try draft.add(.hiDPI(width: 1280, height: 720, flags: .standard)).isEmpty)
+        #expect(draft.working.resolutions == [
+            .standard(width: 2560, height: 1440), .hiDPI(width: 1280, height: 720, flags: .standard),
+        ])
     }
 
-    @Test func removesByOffsets() {
+    @Test func removesTheOneTimesEntryItAddedWithAHiDPIEntry() throws {
+        var draft = OverrideDraft(DisplayOverride(key: key))
+        try draft.add(.hiDPI(width: 1280, height: 720, flags: .standard))
+        draft.remove([.hiDPI(width: 1280, height: 720, flags: .standard)])
+        #expect(draft.working.resolutions.isEmpty)
+        #expect(!draft.hasChanges)
+    }
+
+    /// Apple's file for the built-in panel lists its native size at 1×. A HiDPI entry added
+    /// and removed again must leave that entry alone, in one session or across two.
+    @Test func neverRemovesAOneTimesEntryItDidNotAdd() throws {
+        let native = ScaleResolution.standard(width: 3456, height: 2234)
+        let hiDPI = ScaleResolution.hiDPI(width: 1728, height: 1117, flags: .standard)
+        var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [native]))
+        try draft.add(hiDPI)
+        draft.remove([hiDPI])
+        #expect(draft.working.resolutions == [native])
+
+        try draft.add(hiDPI)
+        var reopened = OverrideDraft(try DisplayOverride(key: key, propertyList: draft.working.propertyListData()))
+        reopened.remove([hiDPI])
+        #expect(reopened.working.resolutions == [native])
+    }
+
+    @Test func forgetsAPairingOnceTheOneTimesEntryIsRemovedByHand() throws {
+        let hiDPI = ScaleResolution.hiDPI(width: 1280, height: 720, flags: .standard)
+        let oneTimes = ScaleResolution.standard(width: 2560, height: 1440)
+        var draft = OverrideDraft(DisplayOverride(key: key))
+        try draft.add(hiDPI)
+        draft.remove([oneTimes])
+        try draft.add(oneTimes)  // now the person's own entry
+        draft.remove([hiDPI])
+        #expect(draft.working.resolutions == [oneTimes])
+    }
+
+    @Test func listsWhatReopeningTheFileWouldList() throws {
+        var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [.standard(width: 2560, height: 1440)]))
+        try draft.add(.hiDPI(width: 1280, height: 720, flags: .standard))
+        try draft.add(.hiDPI(width: 1600, height: 900, flags: .standard))
+        try draft.add(.standard(width: 1920, height: 1080))
+        #expect(throws: ResoluteError.self) { try draft.add(.standard(width: 2560, height: 1440)) }
+        let reopened = try DisplayOverride(key: key, propertyList: draft.working.propertyListData())
+        #expect(reopened.resolutions == draft.working.resolutions)
+    }
+
+    @Test func removesTheGivenEntries() {
         var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [
             .standard(width: 1920, height: 1080), .standard(width: 2560, height: 1440), .standard(width: 3840, height: 2160),
         ]))
-        draft.remove(atOffsets: IndexSet([0, 2, 7]))
+        draft.remove([.standard(width: 1920, height: 1080), .standard(width: 3840, height: 2160), .standard(width: 1, height: 1)])
         #expect(draft.working.resolutions == [.standard(width: 2560, height: 1440)])
     }
 }

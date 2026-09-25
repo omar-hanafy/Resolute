@@ -191,7 +191,8 @@ final class CustomResolutionsModel {
 
     func remove(rows ids: Set<Int>) {
         guard !isWorking else { return }
-        draft?.remove(atOffsets: IndexSet(ids))
+        let entries = rows.filter { ids.contains($0.id) }.map(\.entry)
+        draft?.remove(entries)
     }
 
     func revert() {
