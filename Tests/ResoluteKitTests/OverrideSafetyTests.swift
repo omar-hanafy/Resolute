@@ -150,6 +150,26 @@ import Testing
         #expect(try OverrideStore(locations: installer.locations).installedOverride(for: key) == nil)
     }
 
+    /// The app's path: osascript runs lockf, which runs the quoted script. Without
+    /// administrator rights here, so no password prompt appears.
+    @Test func installsThroughAppleScriptUnderTheScriptLock() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let date = fixedDate
+        var installer = OverrideInstaller(
+            locations: .staged(at: root), runner: AdminCommandRunner(prompt: "unused", withAdministratorPrivileges: false),
+            now: { date }
+        )
+        installer.scriptLock = installer.locations.lockFile
+        let named = DisplayOverride(key: key, productName: "Studio's \"27\"", resolutions: [.standard(width: 1920, height: 1200)])
+        try await installer.install(named, expecting: .absent)
+        let store = OverrideStore(locations: installer.locations)
+        #expect(try store.installedOverride(for: key)?.productName == "Studio's \"27\"")
+        try await installer.remove(key, expecting: try store.installedState(for: key))
+        #expect(try store.installedOverride(for: key) == nil)
+        #expect(FileManager.default.fileExists(atPath: installer.locations.lockFile.path(percentEncoded: false)))
+    }
+
     /// osascript reports a failed script as "0:47: execution error: <message> (<status>)"
     /// and exits with 1, which would hide the status the installer acts on.
     @Test func readsTheStatusAndMessageOsascriptReports() {
