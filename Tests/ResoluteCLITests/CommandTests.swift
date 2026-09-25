@@ -687,7 +687,8 @@ import Testing
         #expect(lines.contains("   Override: none"))
         #expect(lines.contains("Overrides for displays that are not connected:"))
         #expect(lines.contains("  vendor db4, product 3401: 2 entries, 1 backup"))
-        #expect(lines.last?.hasPrefix("Recent activity: log show --last 1h --predicate") == true)
+        // Info messages too: a mode switch logs whether the display took the mode at that level.
+        #expect(lines.last == "What Resolute logged: log show --predicate 'subsystem == \"com.omarhanafy.Resolute\"' --info --last 1h")
     }
 
     @Test func reportsAsJSON() async throws {

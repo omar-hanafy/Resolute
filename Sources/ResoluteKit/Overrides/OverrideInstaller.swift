@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Writes and removes override files through a `CommandRunning`, backing up what it replaces.
 public struct OverrideInstaller: Sendable {
@@ -12,6 +13,7 @@ public struct OverrideInstaller: Sendable {
     public var scriptLock: URL?
     /// How long a script waits for `scriptLock`, in seconds.
     public var scriptLockTimeout = 60
+    private static let log = ResoluteLog.overrides
 
     public init(
         locations: OverrideLocations = .standard,
@@ -48,14 +50,21 @@ public struct OverrideInstaller: Sendable {
     public func install(contents: Data, for key: OverrideKey, expecting state: OverrideFileState? = nil) async throws -> URL {
         let destination = locations.userFile(for: key)
         let script = Self.installScript(contents: contents, destination: destination, backupStem: backupStem(for: key), expecting: state)
-        try await run(script, changing: destination)
+        let path = destination.path(percentEncoded: false)
+        try await logging("Wrote \(path), \(contents.count) bytes", failure: "Did not write \(path)") {
+            try await run(script, changing: destination)
+        }
         return destination
     }
 
     /// Deletes the override for `key`, and its vendor folder when that is left empty.
     public func remove(_ key: OverrideKey, expecting state: OverrideFileState? = nil) async throws {
         let destination = locations.userFile(for: key)
-        try await run(Self.removeScript(destination: destination, backupStem: backupStem(for: key), expecting: state), changing: destination)
+        let script = Self.removeScript(destination: destination, backupStem: backupStem(for: key), expecting: state)
+        let path = destination.path(percentEncoded: false)
+        try await logging("Removed \(path)", failure: "Did not remove \(path)") {
+            try await run(script, changing: destination)
+        }
     }
 
     /// Deletes `backups`, and their folders once empty. Refuses anything outside the
@@ -69,7 +78,33 @@ public struct OverrideInstaller: Sendable {
                 throw ResoluteError.invalidEntry("\(backup.file.path(percentEncoded: false)) is not a backup in \(root).")
             }
         }
-        try await run(Self.removeBackupsScript(files: backups.map(\.file)), changing: nil)
+        let folders = Set(backups.map { Self.folderPath($0.file.deletingLastPathComponent()) })
+        let from = folders.count == 1 ? folders.first ?? "" : Self.folderPath(locations.backupRoot)
+        let count = backups.count == 1 ? "1 backup" : "\(backups.count) backups"
+        try await logging("Removed \(count) from \(from)", failure: "Did not remove \(count) from \(from)") {
+            try await run(Self.removeBackupsScript(files: backups.map(\.file)), changing: nil)
+        }
+    }
+
+    /// Runs `change` and logs `done`, or `failure` with the reason. A cancelled password
+    /// prompt changes nothing, so it is only noted.
+    private func logging(_ done: String, failure: String, _ change: () async throws -> Void) async throws {
+        do {
+            try await change()
+            Self.log.notice("\(done, privacy: .public)")
+        } catch ResoluteError.cancelled {
+            Self.log.info("\(failure, privacy: .public): the password prompt was cancelled")
+            throw ResoluteError.cancelled
+        } catch {
+            Self.log.error("\(failure, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+    }
+
+    /// A folder's path without the trailing slash, as messages show it.
+    private static func folderPath(_ url: URL) -> String {
+        let path = url.path(percentEncoded: false)
+        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
     }
 
     /// Runs `script`, under `scriptLock` when there is one, and names what went wrong.

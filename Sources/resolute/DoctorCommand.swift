@@ -236,7 +236,7 @@ struct DoctorReport: Encodable {
             }
         }
         lines.append("")
-        lines.append("Recent activity: log show --last 1h --predicate 'subsystem == \"com.omarhanafy.Resolute\"'")
+        lines.append("What Resolute logged: log show --predicate 'subsystem == \"\(ResoluteLog.subsystem)\"' --info --last 1h")
         return lines.joined(separator: "\n")
     }
 
