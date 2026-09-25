@@ -89,6 +89,15 @@ import Testing
         })
     }
 
+    /// A hidden resolution in use is listed without ⌥, so the hint leaves it out, and says
+    /// nothing when ⌥ would add nothing.
+    @Test func leavesTheResolutionInUseOutOfTheHint() {
+        var fullHD = TestData.fullHD(currentModeID: 91)
+        #expect(MenuModel.hiddenModesHint(for: fullHD) == "Hold ⌥ to Show Hidden Refresh Rates")
+        fullHD.modes.removeAll { $0.modeID == 90 }
+        #expect(MenuModel.hiddenModesHint(for: fullHD) == nil)
+    }
+
     /// The menu and `resolute modes` label a resolution the same way: Default wins over Native.
     @Test func badgesAResolutionOnce() {
         let group = { (flags: UInt32) in

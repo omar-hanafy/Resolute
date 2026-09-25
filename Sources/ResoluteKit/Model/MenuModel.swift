@@ -232,11 +232,14 @@ public enum MenuModel {
     }
 
     /// What holding ⌥ adds to this submenu: resolutions only hidden modes offer, counted as
-    /// the menu lists them; failing those, refresh rates of listed resolutions.
+    /// the menu lists them; failing those, refresh rates of listed resolutions. A hidden
+    /// mode in use is listed without ⌥, so it does not count.
     static func hiddenModesHint(for display: Display) -> String? {
-        let hiddenResolutions = ModeCatalog.groups(display.modes).filter(\.isHidden).count
+        let current = ModeCatalog.currentKey(for: display)
+        let hiddenResolutions = ModeCatalog.groups(display.modes).filter { $0.isHidden && $0.key != current }.count
         if hiddenResolutions > 0 { return "Hold ⌥ to Show Hidden Resolutions (\(hiddenResolutions))" }
-        return display.hiddenModeCount > 0 ? "Hold ⌥ to Show Hidden Refresh Rates" : nil
+        let hiddenRates = display.modes.contains { $0.origin == .hidden && $0.modeID != display.currentModeID }
+        return hiddenRates ? "Hold ⌥ to Show Hidden Refresh Rates" : nil
     }
 
     private static func render(_ nodes: [MenuNode], depth: Int) -> [String] {
