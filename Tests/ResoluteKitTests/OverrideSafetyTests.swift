@@ -158,16 +158,16 @@ import Testing
         let lockFile = installer.locations.lockFile
         installer.scriptLock = lockFile
         installer.scriptLockTimeout = 1
-        let log = EventLog()
-        async let holder: Void = OverrideLock(file: lockFile).withLock {
-            await log.add("held")
-            try? await Task.sleep(for: .seconds(3))
-        }
-        await log.waitFor("held")
+        // Keep the real lock held until the attempted install finishes. A timed
+        // holder could release before a busy runner even starts the installer.
+        try FileManager.default.createDirectory(at: lockFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let holder = open(lockFile.path(percentEncoded: false), O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+        try #require(holder >= 0)
+        defer { close(holder) }
+        try #require(flock(holder, LOCK_EX | LOCK_NB) == 0)
         await #expect(throws: ResoluteError.overridesBusy) {
             try await installer.install(override(1920))
         }
-        try await holder
         #expect(try OverrideStore(locations: installer.locations).installedOverride(for: key) == nil)
     }
 

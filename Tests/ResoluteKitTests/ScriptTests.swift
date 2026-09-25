@@ -54,6 +54,9 @@ import Testing
     /// always a stub and BUNDLE_ID is always fake, so this never touches a real app.
     private static func quitAndWaitStatus(stub: String, env: [String: String] = [:]) throws -> Int32 {
         var script = "source \(shellQuote(libPath))\n"
+        // Advance the quit deadline only when its polling loop sleeps. Process startup
+        // and host scheduling must not consume this test's simulated deadline.
+        script += "clock=0\ndate() { echo \"$clock\"; }\nsleep() { clock=$((clock + $1)); }\n"
         script += stub + "\n"
         script += "BUNDLE_ID=\(shellQuote("com.example.NotResolute"))\n"
         for (key, value) in env.sorted(by: { $0.key < $1.key }) {
@@ -122,11 +125,58 @@ import Testing
         let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
         let pidFile = folder.appending(path: "pid")
-        let app = try Self.fakeApp(running: "echo $$ > \(Self.shellQuote(pidFile.path)); exec sleep 30", in: folder)
-        let started = Date()
-        let output = try Self.unregister(app, timeout: 1)
-        #expect(Date().timeIntervalSince(started) < 4)
-        #expect(output.contains("Turn it off in System Settings > General > Login Items."))
+        let ready = folder.appending(path: "ready")
+        let hold = folder.appending(path: "hold")
+        let expired = folder.appending(path: "watchdog-expired")
+        let app = try Self.fakeApp(running: """
+            echo $$ > \(Self.shellQuote(pidFile.path))
+            echo ready > \(Self.shellQuote(ready.path))
+            read -r ignored < \(Self.shellQuote(hold.path))
+            """, in: folder)
+        #expect(mkfifo(ready.path, 0o600) == 0)
+        #expect(mkfifo(hold.path, 0o600) == 0)
+        let script = """
+        source \(Self.shellQuote(Self.libPath))
+        # The watchdog bounds a broken implementation; it never advances the tested clock.
+        (
+          /bin/sleep 30 &
+          sleeper=$!
+          trap 'kill "$sleeper" 2>/dev/null; wait "$sleeper" 2>/dev/null; exit' TERM
+          wait "$sleeper"
+          touch \(Self.shellQuote(expired.path))
+          kill -KILL "$(cat \(Self.shellQuote(pidFile.path)))" 2>/dev/null
+          kill -KILL $$
+        ) >/dev/null 2>&1 &
+        watchdog=$!
+        cleanup() {
+          result=$?
+          kill "$watchdog" 2>/dev/null
+          wait "$watchdog" 2>/dev/null
+          if (( result != 0 )); then
+            kill -KILL "$(cat \(Self.shellQuote(pidFile.path)))" 2>/dev/null
+          fi
+          exit "$result"
+        }
+        trap cleanup EXIT
+        polls=0
+        sleep() {
+          [[ "$1" == "0.1" ]] || exit 91
+          if (( polls == 0 )); then
+            read -r started < \(Self.shellQuote(ready.path))
+            [[ "$started" == ready ]] || exit 92
+          fi
+          kill -0 "$(cat \(Self.shellQuote(pidFile.path)))" || exit 93
+          polls=$((polls + 1))
+        }
+        RESOLUTE_UNREGISTER_TIMEOUT=1
+        unregister_login_item \(Self.shellQuote(app.path))
+        [[ "$polls" == 10 ]] || exit 94
+        """
+        let result = try Self.run("/bin/bash", ["-c", script])
+        #expect(result.status == 0, "\(result.output)")
+        #expect(!FileManager.default.fileExists(atPath: expired.path), "the unregister operation hung")
+        #expect(result.output.contains("Could not turn off Launch at Login: the app did not answer."))
+        #expect(result.output.contains("Turn it off in System Settings > General > Login Items."))
         let pid = try #require(Int32(String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
         #expect(kill(pid, 0) != 0, "the stand-in app is still running")
     }
@@ -189,7 +239,7 @@ import Testing
           if [[ -s \(Self.shellQuote(calls.path)) && $(wc -l < \(Self.shellQuote(calls.path))) -gt 2 ]]; then echo false; else echo true; fi
         }
         """
-        #expect(try Self.quitAndWaitStatus(stub: stub, env: ["RESOLUTE_QUIT_POLL_INTERVAL": "0.05"]) == 0)
+        #expect(try Self.quitAndWaitStatus(stub: stub) == 0)
         let sent = try String(contentsOf: calls, encoding: .utf8)
         #expect(sent.contains("ignoring application responses"))
     }
@@ -253,7 +303,7 @@ import Testing
           fi
         }
         """
-        let status = try Self.quitAndWaitStatus(stub: stub, env: ["RESOLUTE_QUIT_POLL_INTERVAL": "0.05"])
+        let status = try Self.quitAndWaitStatus(stub: stub)
         #expect(status == 0)
     }
 
@@ -266,7 +316,7 @@ import Testing
         """
         let status = try Self.quitAndWaitStatus(
             stub: stub,
-            env: ["RESOLUTE_QUIT_TIMEOUT": "1", "RESOLUTE_QUIT_POLL_INTERVAL": "0.2"]
+            env: ["RESOLUTE_QUIT_TIMEOUT": "1"]
         )
         #expect(status == 1)
     }
