@@ -332,4 +332,11 @@ Commit messages describe the change only (no tool attribution).
 - **Rates and scales are decimal numbers.** `Double(_:)` also read "0x3c" as 60.
 - **Identical elements.** A file with the same element twice lists it once: rows need
   an identity, and none of Apple's 251 files repeats an element.
+- **Hidden modes after logout (open).** WindowServer saves a display's mode by its
+  attributes (`Wide`, `High`, `Hz`, `Depth`, `Scale` in
+  `~/Library/Preferences/ByHost/com.apple.windowserver.displays.<UUID>.plist`), not by
+  mode ID. Whether it brings back a mode only SkyLight lists depends on which list it
+  matches against, which needs a display with hidden modes and a logout to find out;
+  TESTING.md asks. Reapplying the mode at login is not built: it would show the
+  Keep/Revert countdown at every login.
 
