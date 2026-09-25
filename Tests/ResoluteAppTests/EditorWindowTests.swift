@@ -105,6 +105,20 @@ import Testing
         }
     }
 
+    /// The bottom bar keeps whole button titles: one row when they fit, else the save
+    /// buttons go under the file buttons.
+    @Test func wrapsTheButtonBarRatherThanCuttingTitles() {
+        func bar(width: CGFloat) -> CGSize {
+            let bar = ActionBarLayout(spacing: 8) {
+                Color.clear.frame(width: 200, height: 20)
+                Color.clear.frame(width: 150, height: 22)
+            }
+            return NSHostingController(rootView: bar).sizeThatFits(in: CGSize(width: width, height: 1000))
+        }
+        #expect(bar(width: 358) == CGSize(width: 358, height: 22))
+        #expect(bar(width: 357) == CGSize(width: 357, height: 50))
+    }
+
     /// The window becomes key when someone comes back to it, and after its sheets and
     /// alerts close: the override is read again then.
     @Test func readsTheOverrideAgainWhenTheWindowBecomesKey() throws {

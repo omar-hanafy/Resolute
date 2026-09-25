@@ -166,6 +166,43 @@ private struct OverrideFileActions: View {
     }
 }
 
+/// Groups of buttons in one row, the last group at the trailing edge; or, when the row
+/// would cut their titles short, one group per row, the last still trailing. Unlike two
+/// alternative layouts, each button stays one view, with its own sheets and dialogs.
+struct ActionBarLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let row = rowWidth(sizes)
+        let width = proposal.width ?? row
+        if row <= width {
+            return CGSize(width: width, height: sizes.map(\.height).max() ?? 0)
+        }
+        let height = sizes.map(\.height).reduce(0, +) + spacing * CGFloat(max(sizes.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let oneRow = rowWidth(sizes) <= bounds.width
+        var x = bounds.minX
+        var y = bounds.minY
+        for (index, subview) in subviews.enumerated() {
+            let size = sizes[index]
+            let isLast = index == subviews.count - 1
+            let origin = CGPoint(x: isLast ? bounds.maxX - size.width : x, y: oneRow ? bounds.midY - size.height / 2 : y)
+            subview.place(at: origin, anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            y += size.height + spacing
+        }
+    }
+
+    private func rowWidth(_ sizes: [CGSize]) -> CGFloat {
+        sizes.map(\.width).reduce(0, +) + spacing * CGFloat(max(sizes.count - 1, 0))
+    }
+}
+
 /// Says the file changed on disk under unsaved changes, which stay until Reload.
 private struct ChangedOnDiskBanner: View {
     let model: CustomResolutionsModel
@@ -177,10 +214,11 @@ private struct ChangedOnDiskBanner: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("This override changed on disk after you opened it.")
-                Text("Your changes are still here. Saving asks before it replaces the new version.")
+                Text("Your changes are still here. Saving asks before replacing it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .fixedSize(horizontal: false, vertical: true)
             Spacer()
             Button("Reload") { model.reloadFromDisk() }
                 .help("Discard your changes and open the version on disk")
@@ -280,18 +318,22 @@ private struct OverrideEditor: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
-            HStack {
-                OverrideFileActions(model: model)
-                Spacer()
-                if model.isWorking {
-                    ProgressView().controlSize(.small)
+            // At the window's narrowest, Revert and Save… go under the file buttons.
+            ActionBarLayout {
+                HStack {
+                    OverrideFileActions(model: model)
                 }
-                Button("Revert") { model.revert() }
-                    .disabled(!model.hasChanges || model.isWorking)
-                Button("Save…") { Task { await model.save() } }
-                    .keyboardShortcut("s", modifiers: .command)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!model.canSave)
+                HStack {
+                    if model.isWorking {
+                        ProgressView().controlSize(.small)
+                    }
+                    Button("Revert") { model.revert() }
+                        .disabled(!model.hasChanges || model.isWorking)
+                    Button("Save…") { Task { await model.save() } }
+                        .keyboardShortcut("s", modifiers: .command)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!model.canSave)
+                }
             }
         }
         .padding(20)
