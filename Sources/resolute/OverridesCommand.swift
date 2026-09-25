@@ -10,8 +10,12 @@ struct OverridesCommand: AsyncParsableCommand {
             Without --display, --vendor or --product, commands use the main display.
             Changes apply after the display is reconnected or the Mac restarts.
             Commands that write need administrator rights: run them with sudo.
+            Every change backs up the file it replaces; `backups` lists them and `restore` puts one back.
             """,
-        subcommands: [ListOverrides.self, ShowOverride.self, AddResolution.self, RemoveResolution.self, ResetOverride.self],
+        subcommands: [
+            ListOverrides.self, ShowOverride.self, AddResolution.self, RemoveResolution.self, ResetOverride.self,
+            ListBackups.self, RestoreBackup.self, PruneBackups.self,
+        ],
         defaultSubcommand: ListOverrides.self
     )
 
@@ -224,9 +228,11 @@ struct AddResolution: AsyncParsableCommand, ContextCommand {
         let target = try target.target(in: context)
         let installer = try location.installer(in: context)
         try await location.withLock(in: context) {
-            var draft = OverrideDraft(try OverrideStore(locations: location.locations).editableOverride(for: target.key).override)
+            let file = try OverrideStore(locations: location.locations).editableFile(for: target.key)
+            var draft = OverrideDraft(file.override)
             let alsoAdded = try draft.add(newEntry)
-            let url = try await installer.install(draft.working)
+            // The lock keeps other Resolute commands out; this also catches another tool.
+            let url = try await installer.install(draft.working, expecting: file.installedState)
             context.write("Added \(newEntry.summary) for \(target).")
             for partner in alsoAdded {
                 context.write("Also added \(partner.summary), the 1× entry HiDPI entries are paired with.")
@@ -264,19 +270,27 @@ struct RemoveResolution: AsyncParsableCommand, ContextCommand {
         let installer = try location.installer(in: context)
         let store = OverrideStore(locations: location.locations)
         try await location.withLock(in: context) {
-            let (override, source) = try store.editableOverride(for: target.key)
-            guard source != .missing else {
+            let file = try store.editableFile(for: target.key)
+            guard file.source != .missing else {
                 throw ResoluteError.invalidEntry("There is no override for \(target), so there is nothing to remove.")
             }
-            var draft = OverrideDraft(override)
+            var draft = OverrideDraft(file.override)
             let matches = draft.working.resolutions.filter { $0.sameMode(as: unwanted) }
             guard !matches.isEmpty else {
                 throw ResoluteError.invalidEntry(missingMessage(for: unwanted, in: draft.working, target: target))
             }
             draft.remove(matches)
-            let url = try await installer.install(draft.working)
+            let url = try await installer.install(draft.working, expecting: file.installedState)
             let count = matches.count > 1 ? " (\(matches.count) entries)" : ""
             context.write("Removed \(unwanted.sizeText) \(unwanted.kindText)\(count) for \(target).")
+            for entry in draft.newlyUnpairedHiDPIEntries {
+                guard let pixels = entry.pixelSize else { continue }
+                context.write(
+                    "\(entry.sizeText) HiDPI no longer has its 1× entry at \(pixels.width) × \(pixels.height), "
+                        + "which Resolute and RDM add with each HiDPI entry. To put it back: "
+                        + location.command("overrides add \(pixels.width)x\(pixels.height)@1x\(self.target.arguments)", isRoot: context.isRoot)
+                )
+            }
             if case .hiDPI = unwanted, let pixels = unwanted.pixelSize {
                 let partner = ScaleResolution.standard(width: pixels.width, height: pixels.height)
                 if draft.working.resolutions.contains(where: { $0.sameMode(as: partner) }) {
@@ -336,21 +350,237 @@ struct ResetOverride: AsyncParsableCommand, ContextCommand {
             guard !isFolder.boolValue else {
                 throw ResoluteError.invalidEntry("\(file) is a folder, not an override file. Remove it in the Finder.")
             }
-            try await installer.remove(target.key)
+            let state = try OverrideStore(locations: location.locations).installedState(for: target.key)
+            try await installer.remove(target.key, expecting: state)
             return true
         }
         guard removed else {
             context.write(Self.nothingToRemove(for: target))
             return
         }
-        context.write(
-            "Removed the override for \(target). A backup is in \(installer.locations.backupRoot.path(percentEncoded: false))"
-        )
+        let folder = installer.locations.backupFolder(for: target.key).path(percentEncoded: false)
+        context.write("Removed the override for \(target). A backup is in \(folder)")
+        context.write("To undo it: " + location.command("overrides restore 1\(self.target.arguments)", isRoot: context.isRoot))
         context.write(OverridesCommand.reconnectHint)
     }
 
     static func nothingToRemove(for target: OverrideTarget) -> String {
         "There is no custom override for \(target), so there is nothing to remove."
+    }
+}
+
+struct ListBackups: ParsableCommand, ContextCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "backups",
+        abstract: "List the backups of a display's override, newest first."
+    )
+
+    @OptionGroup var target: OverrideTargetOptions
+    @OptionGroup var location: LocationOptions
+
+    @Flag(help: "Print JSON.")
+    var json = false
+
+    func run() throws {
+        try run(in: .live)
+    }
+
+    func run(in context: CommandContext) throws {
+        let target = try target.target(in: context)
+        let store = OverrideStore(locations: location.locations)
+        let summaries = store.backups(for: target.key).enumerated().map { BackupSummary(number: $0.offset + 1, backup: $0.element, store: store) }
+        if json {
+            context.write(try Output.json(summaries))
+            return
+        }
+        let folder = store.locations.backupFolder(for: target.key).path(percentEncoded: false)
+        guard !summaries.isEmpty else {
+            context.write("There are no backups of \(target) in \(folder)")
+            return
+        }
+        context.write("Backups of \(target), newest first, in \(folder):")
+        context.write(Output.table(summaries.map { ["\($0.number)", Output.localTime($0.backup.date), $0.contentsText, $0.fileName] }, indent: "  "))
+        // Restoring writes to /Library, so it needs sudo whoever runs this.
+        context.write("To restore one: " + location.command("overrides restore <number>\(self.target.arguments)", isRoot: true))
+    }
+}
+
+struct RestoreBackup: AsyncParsableCommand, ContextCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "restore",
+        abstract: "Put back a backup of a display's override.",
+        discussion: "Name the backup by its number in `resolute overrides backups` (1 is the newest) or by its file name. "
+            + "The override it replaces is backed up first, so a restore can be undone the same way."
+    )
+
+    @Argument(help: "A number from `resolute overrides backups`, or a backup's file name.")
+    var backup: String
+
+    @OptionGroup var target: OverrideTargetOptions
+    @OptionGroup var location: LocationOptions
+
+    func run() async throws {
+        try await run(in: .live)
+    }
+
+    func run(in context: CommandContext) async throws {
+        let target = try target.target(in: context)
+        let store = OverrideStore(locations: location.locations)
+        let chosen = try Self.pick(backup, from: store.backups(for: target.key), target: target)
+        let data = try store.contents(of: chosen).data
+        // Nothing to change needs no administrator rights, so check before asking for them.
+        guard try store.installedState(for: target.key) != .contents(data) else {
+            context.write(Self.alreadyMatches(chosen, target: target))
+            return
+        }
+        let installer = try location.installer(in: context)
+        try await location.withLock(in: context) {
+            let current = try store.installedState(for: target.key)
+            guard current != .contents(data) else {
+                context.write(Self.alreadyMatches(chosen, target: target))
+                return
+            }
+            let url = try await installer.install(contents: data, for: target.key, expecting: current)
+            context.write("Restored \(chosen.fileName), from \(Output.localTime(chosen.date)), for \(target).")
+            context.write("Saved \(url.path(percentEncoded: false)). The override it replaced is backed up too.")
+            context.write(OverridesCommand.reconnectHint)
+        }
+    }
+
+    /// The backup `text` names: a number from `overrides backups`, or a file name. A path
+    /// counts by its name only, so nothing outside the backup folder is ever read.
+    static func pick(_ text: String, from backups: [OverrideBackup], target: OverrideTarget) throws -> OverrideBackup {
+        let listing = "List them with `resolute overrides backups`."
+        guard !backups.isEmpty else { throw ResoluteError.invalidEntry("There are no backups of \(target).") }
+        if let number = Int(text) {
+            guard backups.indices.contains(number - 1) else {
+                let count = backups.count == 1 ? "there is 1" : "there are \(backups.count)"
+                throw ResoluteError.invalidEntry("There is no backup \(number) of \(target): \(count). \(listing)")
+            }
+            return backups[number - 1]
+        }
+        let name = URL(filePath: text).lastPathComponent
+        guard let match = backups.first(where: { $0.fileName == name }) else {
+            throw ResoluteError.invalidEntry("There is no backup named “\(text)” of \(target). \(listing)")
+        }
+        return match
+    }
+
+    static func alreadyMatches(_ backup: OverrideBackup, target: OverrideTarget) -> String {
+        "The override for \(target) already matches \(backup.fileName), so nothing changed."
+    }
+}
+
+struct PruneBackups: AsyncParsableCommand, ContextCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "prune",
+        abstract: "Delete all but the newest backups of a display's override.",
+        discussion: "With --all, prunes the backups of every display, connected or not."
+    )
+
+    @Option(help: "How many of the newest backups to keep.")
+    var keep = 10
+
+    @Flag(help: "Prune the backups of every display.")
+    var all = false
+
+    @OptionGroup var target: OverrideTargetOptions
+    @OptionGroup var location: LocationOptions
+
+    func validate() throws {
+        guard keep >= 0 else { throw ValidationError("--keep takes 0 or more.") }
+        if all, target.display != nil || target.vendor != nil {
+            throw ValidationError("Pass either --all or one display.")
+        }
+    }
+
+    func run() async throws {
+        try await run(in: .live)
+    }
+
+    func run(in context: CommandContext) async throws {
+        let store = OverrideStore(locations: location.locations)
+        let displays = context.service.displays()
+        let targets = all
+            ? store.backupKeys().map { key in OverrideTarget(key: key, display: displays.first { OverrideKey(display: $0) == key }) }
+            : [try target.target(in: context)]
+        // Nothing to remove needs no administrator rights, so check before asking for them.
+        guard targets.contains(where: { store.backups(for: $0.key).count > keep }) else {
+            if targets.isEmpty { context.write("There are no backups in \(store.locations.backupRoot.path(percentEncoded: false))") }
+            targets.forEach { context.write(nothingToRemove(for: $0, count: store.backups(for: $0.key).count)) }
+            return
+        }
+        let installer = try location.installer(in: context)
+        try await location.withLock(in: context) {
+            for target in targets {
+                let backups = store.backups(for: target.key)
+                guard backups.count > keep else {
+                    context.write(nothingToRemove(for: target, count: backups.count))
+                    continue
+                }
+                let unwanted = Array(backups.dropFirst(keep))
+                try await installer.removeBackups(unwanted)
+                let kept = keep == 0 ? "none" : "the newest \(keep)"
+                context.write("Removed \(Self.count(unwanted.count)) of \(target), and kept \(kept).")
+            }
+        }
+    }
+
+    func nothingToRemove(for target: OverrideTarget, count: Int) -> String {
+        "Nothing to remove: \(target) has \(count == 0 ? "no backups" : Self.count(count))."
+    }
+
+    /// "1 backup", "3 backups"
+    static func count(_ number: Int) -> String {
+        number == 1 ? "1 backup" : "\(number) backups"
+    }
+}
+
+/// A backup as `overrides backups` lists it.
+struct BackupSummary: Encodable {
+    let number: Int
+    let backup: OverrideBackup
+    let entries: Int?
+    let productName: String?
+    let problem: String?
+
+    init(number: Int, backup: OverrideBackup, store: OverrideStore) {
+        self.number = number
+        self.backup = backup
+        do {
+            let override = try store.contents(of: backup).override
+            entries = override.resolutions.count
+            productName = override.productName
+            problem = nil
+        } catch {
+            entries = nil
+            productName = nil
+            problem = error.localizedDescription
+        }
+    }
+
+    var fileName: String { backup.fileName }
+
+    /// "2 entries", "1 entry, named “Studio”", or why it cannot be read.
+    var contentsText: String {
+        guard let entries else { return "can’t be read" }
+        let count = entries == 1 ? "1 entry" : "\(entries) entries"
+        return productName.map { "\(count), named “\($0)”" } ?? count
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case number, date, fileName, path, entries, productName, problem
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(number, forKey: .number)
+        try container.encode(ISO8601DateFormatter().string(from: backup.date), forKey: .date)
+        try container.encode(fileName, forKey: .fileName)
+        try container.encode(backup.file.path(percentEncoded: false), forKey: .path)
+        try container.encode(entries, forKey: .entries)
+        try container.encode(productName, forKey: .productName)
+        try container.encode(problem, forKey: .problem)
     }
 }
 

@@ -15,7 +15,7 @@ struct ResoluteCommand: AsyncParsableCommand {
     )
 
     static let commands = ["displays", "modes", "set", "mirror", "overrides"]
-    static let overridesCommands = ["list", "show", "add", "remove", "reset"]
+    static let overridesCommands = ["list", "show", "add", "remove", "reset", "backups", "restore", "prune"]
 
     static func main() async {
         let result = await execute(Array(CommandLine.arguments.dropFirst()), in: .live)
@@ -89,7 +89,8 @@ struct ResoluteCommand: AsyncParsableCommand {
             if let command = overridesCommands.first(where: { isTypo(word.lowercased(), of: $0) }) {
                 return problem + " Did you mean “resolute overrides \(command)”?"
             }
-            return problem + " The overrides commands are list, show, add, remove and reset."
+            return problem + " The overrides commands are "
+                + overridesCommands.dropLast().joined(separator: ", ") + " and " + (overridesCommands.last ?? "") + "."
         }
         guard !commands.contains(first) else { return nil }
         let problem = "“\(first)” is not a resolute command."

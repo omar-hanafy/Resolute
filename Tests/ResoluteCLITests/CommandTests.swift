@@ -409,7 +409,7 @@ import Testing
         #expect(ResoluteCommand.unknownCommandMessage(for: ["overrides", "ad", "1600x1000"])
             == "“ad” is not an overrides command. Did you mean “resolute overrides add”?")
         #expect(ResoluteCommand.unknownCommandMessage(for: ["overrides", "frobnicate"])
-            == "“frobnicate” is not an overrides command. The overrides commands are list, show, add, remove and reset.")
+            == "“frobnicate” is not an overrides command. The overrides commands are list, show, add, remove, reset, backups, restore and prune.")
         #expect(ResoluteCommand.unknownCommandMessage(for: ["help", "mode"])
             == "“mode” is not a resolute command. Did you mean “resolute help modes”?")
         #expect(ResoluteCommand.unknownCommandMessage(for: ["overrides", "help"])
@@ -479,5 +479,155 @@ import Testing
         let entry = try #require((added["entries"] as? [[String: Any]])?.first)
         #expect(Set(entry.keys) == ["kind", "width", "height", "pixelWidth", "pixelHeight", "flags", "keptAsIs", "summary"])
         #expect(entry["flags"] is NSNull)
+    }
+}
+
+@Suite struct OverrideBackupCommandTests {
+    let key = OverrideKey(vendorID: 0x610, productID: 0xA050)
+
+    /// Three adds: the first creates the file, the next two each back up the one before.
+    func stagedWithBackups() async throws -> (root: URL, staged: [String]) {
+        let root = try stagedRoot()
+        let staged = ["--root", root.path(percentEncoded: false)]
+        for size in ["2560x1440@1x", "1920x1080@1x", "3840x2160@1x"] {
+            try await resolute(["overrides", "add", size] + staged)
+        }
+        return (root, staged)
+    }
+
+    @Test func listsBackupsNewestFirst() async throws {
+        let (root, staged) = try await stagedWithBackups()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let backups = OverrideStore(locations: .staged(at: root)).backups(for: key)
+        let output = try await resolute(["overrides", "backups"] + staged).output
+        let lines = output.split(separator: "\n").map(String.init)
+        #expect(lines.first?.hasPrefix("Backups of Built-in Retina Display (vendor 610, product a050), newest first, in ") == true)
+        #expect(lines[1] == "  1  \(Output.localTime(backups[0].date))  2 entries  \(backups[0].fileName)")
+        #expect(lines[2] == "  2  \(Output.localTime(backups[1].date))  1 entry    \(backups[1].fileName)")
+        #expect(lines.last == "To restore one: resolute overrides restore <number> --root \(Output.shellWord(root.path(percentEncoded: false)))")
+    }
+
+    @Test func listsBackupsAsJSON() async throws {
+        let (root, staged) = try await stagedWithBackups()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = try await resolute(["overrides", "backups", "--json"] + staged).output
+        let list = try #require(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]])
+        #expect(list.count == 2)
+        #expect(list.allSatisfy { Set($0.keys) == ["number", "date", "fileName", "path", "entries", "productName", "problem"] })
+        #expect(list[0]["number"] as? Int == 1)
+        #expect(list[0]["entries"] as? Int == 2)
+        #expect(list[0]["problem"] is NSNull)
+        #expect((list[0]["date"] as? String)?.hasSuffix("Z") == true)
+    }
+
+    @Test func restoresABackupByNumberOrName() async throws {
+        let (root, staged) = try await stagedWithBackups()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = OverrideStore(locations: .staged(at: root))
+        let oldest = try #require(store.backups(for: key).last)
+        let output = try await resolute(["overrides", "restore", "2"] + staged).output
+        #expect(output.hasPrefix("Restored \(oldest.fileName), from \(Output.localTime(oldest.date)), for Built-in Retina Display (vendor 610, product a050)."))
+        #expect(output.hasSuffix("The change applies after you reconnect the display or restart the Mac."))
+        #expect(try store.installedOverride(for: key)?.resolutions == [.standard(width: 2560, height: 1440)])
+        // What it replaced was backed up, and can be restored by name.
+        let replaced = try #require(store.backups(for: key).first)
+        #expect(try store.contents(of: replaced).override.resolutions.count == 3)
+        try await resolute(["overrides", "restore", replaced.fileName] + staged)
+        #expect(try store.installedOverride(for: key)?.resolutions.count == 3)
+    }
+
+    @Test func changesNothingWhenTheBackupMatchesTheOverride() async throws {
+        let (root, staged) = try await stagedWithBackups()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await resolute(["overrides", "restore", "1"] + staged)
+        let count = OverrideStore(locations: .staged(at: root)).backups(for: key).count
+        let output = try await resolute(["overrides", "restore", "2"] + staged).output
+        #expect(output.hasPrefix("The override for Built-in Retina Display (vendor 610, product a050) already matches"))
+        #expect(OverrideStore(locations: .staged(at: root)).backups(for: key).count == count)
+    }
+
+    @Test func explainsABackupThatDoesNotExist() async throws {
+        let (root, staged) = try await stagedWithBackups()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(await failure(["overrides", "restore", "7"] + staged)?.message
+            == "Error: There is no backup 7 of Built-in Retina Display (vendor 610, product a050): there are 2. List them with `resolute overrides backups`.")
+        #expect(await failure(["overrides", "restore", "nope.plist"] + staged)?.message
+            == "Error: There is no backup named “nope.plist” of Built-in Retina Display (vendor 610, product a050). List them with `resolute overrides backups`.")
+    }
+
+    @Test func saysWhenThereAreNoBackups() async throws {
+        let root = try stagedRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let staged = ["--root", root.path(percentEncoded: false)]
+        #expect(try await resolute(["overrides", "backups"] + staged).output.hasPrefix(
+            "There are no backups of Built-in Retina Display (vendor 610, product a050) in "
+        ))
+        #expect(await failure(["overrides", "restore", "1"] + staged)?.message.hasPrefix(
+            "Error: There are no backups of Built-in Retina Display (vendor 610, product a050)"
+        ) == true)
+        // Nothing to prune needs no administrator rights.
+        #expect(try await resolute(["overrides", "prune", "--vendor", "fff0", "--product", "fff1"]).output
+            == "Nothing to remove: vendor fff0, product fff1 has no backups.")
+    }
+
+    @Test func prunesAllButTheNewest() async throws {
+        let (root, staged) = try await stagedWithBackups()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await resolute(["overrides", "add", "5120x2880@1x"] + staged)
+        let store = OverrideStore(locations: .staged(at: root))
+        let newest = Array(store.backups(for: key).prefix(1))
+        #expect(try await resolute(["overrides", "prune", "--keep", "1"] + staged).output
+            == "Removed 2 backups of Built-in Retina Display (vendor 610, product a050), and kept the newest 1.")
+        #expect(store.backups(for: key) == newest)
+        #expect(try await resolute(["overrides", "prune", "--keep", "1"] + staged).output
+            == "Nothing to remove: Built-in Retina Display (vendor 610, product a050) has 1 backup.")
+    }
+
+    @Test func prunesEveryDisplayWithAll() async throws {
+        let (root, staged) = try await stagedWithBackups()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for size in ["1600x1000@1x", "1680x1050@1x"] {
+            try await resolute(["overrides", "add", size, "--vendor", "10ac", "--product", "a0c4"] + staged)
+        }
+        let output = try await resolute(["overrides", "prune", "--keep", "0", "--all"] + staged).output
+        #expect(output == """
+            Removed 2 backups of Built-in Retina Display (vendor 610, product a050), and kept none.
+            Removed 1 backup of vendor 10ac, product a0c4, and kept none.
+            """)
+        #expect(OverrideStore(locations: .staged(at: root)).backupKeys().isEmpty)
+        #expect(await failure(["overrides", "prune", "--all", "-d", "main"] + staged)?.code == 64)
+        #expect(await failure(["overrides", "prune", "--keep", "-1"] + staged)?.code == 64)
+    }
+
+    @Test func pointsAResetAtRestore() async throws {
+        let (root, staged) = try await stagedWithBackups()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = try await resolute(["overrides", "reset"] + staged).output
+        #expect(output.contains("To undo it: resolute overrides restore 1 --root "))
+    }
+
+    /// Hints after a change repeat the command the way it was run: with sudo, or --root.
+    @Test func writesFollowUpCommandsTheWayTheChangeWasRun() throws {
+        let real = try LocationOptions.parse([])
+        #expect(real.command("overrides restore 1 -d DELL", isRoot: true) == "sudo resolute overrides restore 1 -d DELL")
+        let staged = try LocationOptions.parse(["--root", "/tmp/a b"])
+        #expect(staged.command("overrides restore 1", isRoot: false) == "resolute overrides restore 1 --root '/tmp/a b'")
+    }
+}
+
+@Suite struct UnpairedEntryWarningTests {
+    /// Removing the 1× entry a HiDPI entry renders at is allowed, with a word about it.
+    @Test func warnsWhenAHiDPIEntryLosesItsOneTimesEntry() async throws {
+        let root = try stagedRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let staged = ["--root", root.path(percentEncoded: false)]
+        try await resolute(["overrides", "add", "1280x720"] + staged)
+        let output = try await resolute(["overrides", "remove", "2560x1440@1x"] + staged).output
+        #expect(output.contains(
+            "1280 × 720 HiDPI no longer has its 1× entry at 2560 × 1440, which Resolute and RDM add with each HiDPI entry. "
+                + "To put it back: resolute overrides add 2560x1440@1x --root "
+        ))
+        let quiet = try await resolute(["overrides", "remove", "1280x720"] + staged).output
+        #expect(!quiet.contains("no longer has"))
     }
 }

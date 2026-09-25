@@ -45,6 +45,15 @@ enum Output {
         }.joined(separator: "\n")
     }
 
+    /// "2026-09-25 14:03:12", in this Mac's time zone.
+    static func localTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
     static func hex(_ value: UInt32) -> String {
         String(value, radix: 16)
     }
