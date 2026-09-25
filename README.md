@@ -10,14 +10,14 @@ Resolute is a ground-up successor to [RDM](https://github.com/avibrazil/RDM). On
 - **Refresh rates.** Switch between 120, 60, 59.94, 50, 48 and 47.95 Hz, or whatever your display offers, without changing the resolution.
 - **Safe hidden modes.** A hidden mode is tried for the current session and reverts after 15 seconds unless you choose Keep (in the menu) or type `y` (in the terminal), so a mode your display cannot show undoes itself.
 - **Mirroring** on or off with one click.
-- **Custom HiDPI resolutions** through display override files, like RDM's editor, with automatic backups.
-- **A command-line tool,** `resolute`, for scripts and shortcuts, with JSON output.
+- **Custom HiDPI resolutions** through display override files, like RDM's editor, with backups you can restore.
+- **A command-line tool,** `resolute`, for scripts and shortcuts, with [JSON output](docs/json.md) and a `resolute doctor` report for bug reports.
 - **Launch at Login.**
 
 ## Requirements
 
-- macOS 14 Sonoma or later. Developed and tested on macOS 27 on Apple silicon.
-- To build: Xcode with Swift 6. Developed and tested with Xcode 27 (Swift 6.4); older toolchains are untested.
+- macOS 14 Sonoma or later. Developed and tested on macOS 27 on Apple silicon; the Intel build is checked under Rosetta.
+- To build: Xcode 16 or later (the package needs Swift 6.0). Only Xcode 27 (Swift 6.4) has been tested so far.
 
 ## Install
 
@@ -60,18 +60,20 @@ $ resolute set 1920x1080 -d DELL --session   # another display, until you log ou
 $ resolute set --mode-id <id> --allow-hidden  # a hidden mode from `resolute modes --all --raw`: kept only if you type y
 $ resolute mirror toggle
 $ resolute displays --json
+$ resolute doctor                 # versions, displays, modes and overrides, for a bug report
 ```
 
 `-d` takes `main`, an index from `resolute displays`, `id:<number>`, or part of a display's name. `resolute help <command>` explains the rest.
 
-With `--json`, vendor and product IDs are hex strings, the way `--vendor` and `--product` take them. `resolute --generate-completion-script zsh` (or `bash`, `fish`) prints shell completions.
+With `--json`, every key is always present, with `null` when there is no value; [docs/json.md](docs/json.md) lists them. Vendor and product IDs are hex strings, the way `--vendor` and `--product` take them. `resolute --generate-completion-script zsh` (or `bash`, `fish`) prints shell completions.
 
 ## Custom resolutions
 
 macOS reads per-display override files from `/Library/Displays/Contents/Resources/Overrides`. The **Custom Resolutions…** window, and `resolute overrides`, edit the `scale-resolutions` list in those files, so you can add modes a display does not offer, such as 2560 × 1080 HiDPI on a 5120 × 2160 monitor.
 
-- The list shows every entry in the file. Adding a HiDPI resolution also adds a 1× entry at its rendered size, as RDM did, unless the list has one; removing the HiDPI entry removes that 1× entry only if it was added with it in the same edit.
-- Saving asks for an administrator password. The file being replaced is first copied to `/Library/Application Support/Resolute/Backups`.
+- The list shows every entry in the file, in the file's order. Adding a HiDPI resolution also adds a 1× entry at its rendered size, as RDM did, unless the list has one; removing the HiDPI entry removes that 1× entry only if it was added with it in the same edit. Removing a 1× entry that a HiDPI entry renders at gets a note, with a way to put it back.
+- Saving asks for an administrator password. The file being replaced is first copied to `/Library/Application Support/Resolute/Backups`. **Restore Backup…** (or `sudo resolute overrides restore`) puts one back, and `sudo resolute overrides prune` deletes old ones.
+- If the file changed after you opened it, for example through `resolute overrides`, Resolute reads it again or, when you have unsaved changes, asks before saving over it.
 - New modes appear after you reconnect the display or restart the Mac.
 - On Apple silicon Macs, macOS may ignore custom scaled resolutions for some displays.
 - **Remove Override…** (or `sudo resolute overrides reset -d <display>`) deletes the file and returns the display to its defaults.
@@ -82,13 +84,16 @@ sudo resolute overrides add 2560x1080 -d DELL              # HiDPI, looks like 2
 sudo resolute overrides add 3440x1440 --standard -d DELL   # a 1× mode
 sudo resolute overrides remove 2560x1080 -d DELL
 sudo resolute overrides reset -d DELL
+resolute overrides backups -d DELL                      # newest first
+sudo resolute overrides restore 1 -d DELL               # puts the newest back
+sudo resolute overrides prune --keep 5 --all            # deletes older backups
 ```
 
 ## How it works
 
 Resolute asks CoreGraphics for every mode, including the low-resolution duplicates it usually hides. It also reads the private SkyLight mode list that RDM relied on, which can include modes CoreGraphics leaves out. Before trusting that list, Resolute decodes every record and checks it against CoreGraphics; if the record layout changes in a future macOS, hidden modes disappear instead of showing wrong values. Listed modes are switched with the public `CGConfigureDisplayWithDisplayMode`; only hidden ones use `CGSConfigureDisplayMode`.
 
-The macOS 27 record layout is documented in [docs/design/2026-09-25-resolute-design.md](docs/design/2026-09-25-resolute-design.md). `swift Scripts/capture-mode-fixture.swift` dumps your main display's raw records, which is how to check a new macOS release.
+The macOS 27 record layout is documented in [docs/design/2026-09-25-resolute-design.md](docs/design/2026-09-25-resolute-design.md). [docs/new-macos-release.md](docs/new-macos-release.md) lists what to check on each new macOS release, starting with `swift Scripts/capture-mode-fixture.swift`, which dumps a display's raw records.
 
 ## Development
 
