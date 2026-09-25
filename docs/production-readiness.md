@@ -37,7 +37,7 @@ The hosted runner labels/toolchains were checked against [GitHub's runner invent
 1. **Distribution:** exercise Developer ID signing, notarization, stapling and Gatekeeper on the intended downloadable artifact. The keychain reported zero valid code-signing identities during this review; the successful local ad hoc build does not satisfy this gate.
 2. **External hardware:** the GM34-CWQ follow-up below validates scaling, refresh switching and hidden-mode return. Mirroring, a controlled hotplug during recovery, sleep/wake, reboot and other display models still need [TESTING.md](../TESTING.md).
 3. **Privilege integration:** production scripts and filesystem protections passed tests in isolated locations, including root-policy rejection without elevation. No real elevated installation/removal of a system override was performed in this review. Verify the complete administrator prompt, save, backup and restore path on a test Mac before distribution.
-4. **OS coverage:** the configured hosted matrix and macOS 14 minimum still need actual runs. Intel is optional compilation compatibility and was not tested here.
+4. **OS coverage:** the hosted matrix below passed builds, automated tests and app packaging. The macOS 14 minimum still needs runtime validation; hosted runners do not establish external-display hardware support. Intel is optional compilation compatibility and was not tested here.
 5. **Identity:** monitors reporting identical or missing serial numbers cannot always be distinguished. Rebinding to a changed display ID requires a unique nonzero serial match. Identical devices with reused IDs remain a hardware identity limitation; ambiguous recovery must not guess.
 6. **Recovery boundaries:** Force Quit, crashes, power/input changes and indefinitely absent hardware can defeat automatic restoration. Recovery is not a separate watchdog service. Session trials end at logout. User-writable staging directories do not have the same parent-replacement protection as the root-owned production directories.
 
@@ -62,3 +62,19 @@ This verifies the current connected state and programmatic mode/revert paths. It
 - The source license and bundled dependency license are included. Current build/contribution documentation identifies Apple silicon as the primary target and separates source availability from binary-distribution validation.
 - Keep the release a draft/prerelease until the intended distribution checks are complete. Publishing the source does not require notarization; distributing a notarized app does.
 - When making the repository public, enable and verify GitHub private vulnerability reporting if available, then document that working channel. It was unavailable while this repository was private. Public issues are for ordinary bugs, not confidential reports.
+
+## Hosted preflight and final candidate
+
+[Hosted CI run 36164896941](https://github.com/omar-hanafy/Resolute/actions/runs/36164896941) passed on source/test revision `3c18c6d`:
+
+| Runner label | Selected Xcode | Build | Automated tests | App bundle |
+| --- | --- | --- | --- | --- |
+| `macos-15` | 16.0 | Passed | Passed | Passed |
+| `macos-26` | 26.6 | Passed | Passed | Passed |
+| `xcode-27` | 27.0 | Passed | Passed | Passed |
+
+The Linux lint job also passed. Live display switching remains opt-in and was not exercised on hosted runners. Missing macOS ShellCheck is covered by the separate Linux lint job; volume-dependent and live-test skips do not count as passes.
+
+Hosted preflight caught older-SDK/compiler incompatibilities, a failed app-version lookup being mistaken for a version, and test assumptions about process startup speed. These are fixed. Subprocess progress and shutdown tests now use startup handshakes and release gates, while lock-contention tests keep the lock held until the operation returns. A deliberately blocking subprocess-runner mutation failed the progress test in an isolated copy; the working implementation passed.
+
+The final local automated run reported **456 tests with eight explicit skips and no failures**. This documentation update records the passed revision; it changes no application, library, CLI, script or test source. The refreshed draft release identifies its exact packaging commit and retains the signing/notarization and hardware limitations above. Repository visibility remains a separate publishing action.

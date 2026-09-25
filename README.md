@@ -19,7 +19,7 @@ Resolute is a Swift menu-bar app and command-line tool inspired by [RDM](https:/
 ## Requirements
 
 - macOS 14 Sonoma or later. **Apple silicon is the primary target** for development, default builds and CI. Intel compilation remains optional compatibility work, with no Intel hardware validation in the current review.
-- To build: Xcode 16 or later (the package needs Swift 6.0). Only Xcode 27 (Swift 6.4) has been tested so far.
+- To build: Xcode 16 or later (the package needs Swift 6.0). Builds, tests and app packaging passed on Xcode 16.0, 26.6 and 27.0 in [hosted CI](https://github.com/omar-hanafy/Resolute/actions/runs/36164896941).
 
 ## Build and install from source
 

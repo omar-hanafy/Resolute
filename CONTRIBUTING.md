@@ -4,7 +4,7 @@ Resolute is an Apple silicon beta / release candidate. Read the [validation reco
 
 ## Build and check
 
-Use macOS 14 or later and Xcode 16 or later with Swift 6.0 or later. The current local validation used Xcode 27 / Swift 6.4; the older toolchains remain CI targets. Select the intended Xcode command-line tools before running:
+Use macOS 14 or later and Xcode 16 or later with Swift 6.0 or later. Local validation used Xcode 27 / Swift 6.4. The hosted Xcode 16.0, 26.6 and 27.0 matrix passed builds, tests and app packaging; see the validation record for the exact revision. Select the intended Xcode command-line tools before running:
 
 ```sh
 make build
