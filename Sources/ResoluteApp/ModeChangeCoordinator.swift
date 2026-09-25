@@ -59,8 +59,9 @@ final class ModeChangeCoordinator {
 
     func apply(modeID: Int32, to displayID: CGDirectDisplayID, needsConfirmation: Bool) {
         // A revert still waiting for this display goes first, so the new switch starts from
-        // the mode the person had rather than from the one on trial.
-        if waiting[displayID] != nil { attempt(displayID) }
+        // the mode the person had rather than from the one on trial. Not while another
+        // switch is under way, where it could open an alert over that countdown.
+        if switchesUnderWay == 0, waiting[displayID] != nil { attempt(displayID) }
         switchesUnderWay += 1
         let result = Result {
             try ModeSwitcher(service: service).apply(modeID: modeID, to: displayID, trial: needsConfirmation) {
@@ -70,22 +71,41 @@ final class ModeChangeCoordinator {
         switchesUnderWay -= 1
         switch result {
         case .success(let outcome):
-            // The person's new choice replaces a revert that is still waiting.
-            if let replaced = waiting.removeValue(forKey: displayID) {
-                ResoluteLog.modes.notice("""
-                    A new mode for \(replaced.restore.displayName, privacy: .public) replaces the restore \
-                    of mode \(replaced.restore.modeID) that was waiting for it
-                    """)
-            }
-            if case .restorePending(let restore) = outcome {
-                wait(for: restore)
-            }
+            settle(outcome, of: displayID)
         case .failure(let error):
             report(error)
         }
         if switchesUnderWay == 0, hasMissedChanges {
             hasMissedChanges = false
             displaysDidChange()
+        }
+    }
+
+    /// Updates the revert still waiting for `displayID`, if any, after a new switch of it.
+    private func settle(_ outcome: ModeSwitcher.Outcome, of displayID: CGDirectDisplayID) {
+        let earlier = waiting.removeValue(forKey: displayID)
+        switch outcome {
+        case .reverted:
+            // Undoing the new trial took the display back to where it was, which can be the
+            // earlier trial a refusing display is still in, so that revert keeps waiting.
+            if let earlier { waiting[displayID] = earlier }
+        case .restorePending(let restore):
+            // Undoing both trials means going back to the mode from before the first one.
+            wait(for: earlier.map {
+                ModeSwitcher.PendingRestore(
+                    displayID: restore.displayID, displayName: restore.displayName,
+                    modeID: $0.restore.modeID, fallbackModeID: $0.restore.fallbackModeID,
+                    trialModeID: restore.trialModeID, failure: restore.failure
+                )
+            } ?? restore)
+        case .alreadyCurrent, .applied, .kept, .keptForSession:
+            // The person's new choice replaces the earlier revert.
+            if let earlier {
+                ResoluteLog.modes.notice("""
+                    A new mode for \(earlier.restore.displayName, privacy: .public) replaces the restore \
+                    of mode \(earlier.restore.modeID) that was waiting for it
+                    """)
+            }
         }
     }
 

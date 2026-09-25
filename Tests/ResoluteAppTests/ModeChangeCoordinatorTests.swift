@@ -141,14 +141,14 @@ final class TestClock {
         )
     }
 
-    /// Tries mode 90 on the monitor, which drops off while the person is asked.
-    func tryModeThatMakesTheMonitorGoAway() {
+    /// Tries `modeID` on the monitor, which drops off while the person is asked.
+    func tryModeThatMakesTheMonitorGoAway(modeID: Int32 = 90) {
         let displays = displays
         countdown.answers.append {
             displays.goAway(2)
             return .revert
         }
-        coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
+        coordinator.apply(modeID: modeID, to: 2, needsConfirmation: true)
     }
 
     @Test func putsThePreviousModeBackWhenTheDisplayReturns() {
@@ -282,6 +282,49 @@ final class TestClock {
         tryModeThatMakesTheMonitorGoAway()
         coordinator.apply(modeID: 3, to: 2, needsConfirmation: false)
         #expect(coordinator.pendingRestores == [pending])
+    }
+
+    /// A display that refuses the previous mode is still in the one on trial, and undoing a
+    /// new trial takes it back there, so the earlier revert keeps waiting.
+    @Test func keepsARefusedRestoreWhenANewTrialOfTheDisplayIsUndone() {
+        tryModeThatMakesTheMonitorGoAway()
+        displays.refused = [1]
+        displays.comeBack(2)
+        coordinator.apply(modeID: 3, to: 2, needsConfirmation: true)
+        #expect(displays.changes.last == Change(displayID: 2, modeID: 90, scope: .session))
+        #expect(coordinator.pendingRestores == [pending])
+        displays.refused = []
+        coordinator.displaysDidChange()
+        #expect(displays.changes.last == Change(displayID: 2, modeID: 1, scope: .session))
+    }
+
+    /// Undoing both trials means going back to the mode from before the first one.
+    @Test func goesBackToTheModeFromBeforeBothTrialsWhenTheDisplayGoesAwayAgain() {
+        tryModeThatMakesTheMonitorGoAway()
+        displays.refused = [1]
+        displays.comeBack(2)
+        tryModeThatMakesTheMonitorGoAway(modeID: 3)
+        #expect(coordinator.pendingRestores == [
+            ModeSwitcher.PendingRestore(displayID: 2, displayName: "DELL P2419H", modeID: 1, fallbackModeID: nil, trialModeID: 3),
+        ])
+    }
+
+    /// A switch chosen while another display's countdown is up leaves the waiting revert
+    /// alone, since trying it could open an alert over the countdown.
+    @Test func leavesAWaitingRestoreAloneDuringAnotherCountdown() {
+        displays.dropMonitor(whenSwitchedTo: 90)
+        coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
+        displays.comeBack(2)
+        var seenDuringCountdown: [ResoluteError]?
+        let (coordinator, reports) = (coordinator, reports)
+        countdown.answers.append {
+            coordinator.apply(modeID: 3, to: 2, needsConfirmation: false)
+            seenDuringCountdown = reports.errors
+            return .revert
+        }
+        coordinator.apply(modeID: 91, to: 1, needsConfirmation: true)
+        #expect(seenDuringCountdown == [])
+        #expect(!displays.changes.contains(Change(displayID: 2, modeID: 1, scope: .session)))
     }
 
     /// The countdown's timer ends the innermost modal alert, so no other alert may open
