@@ -76,20 +76,10 @@ public struct SystemDisplayService: DisplayControlling {
             switch PrivateModeValidator.validate(records: skyLight.records(for: id), against: modes) {
             case .trusted(let records, let hidden):
                 status = .trusted
-                let recordsByID = Dictionary(records.map { ($0.modeID, $0) }, uniquingKeysWith: { first, _ in first })
-                for index in modes.indices {
-                    guard let record = recordsByID[modes[index].modeID] else { continue }
-                    modes[index].privateIndex = record.index
-                    modes[index].bitsPerSample = record.bitsPerSample > 0 ? record.bitsPerSample : nil
-                }
-                var knownIDs = Set(modes.map(\.modeID))
-                for record in hidden where knownIDs.insert(record.modeID).inserted {
-                    modes.append(record.mode(origin: .hidden))
-                }
-                let currentIsListed = currentID.map { listed in modes.contains { $0.modeID == listed } } ?? false
-                if !currentIsListed, let index = skyLight.currentModeIndex(for: id) {
-                    currentID = modes.first { $0.privateIndex == index }?.modeID ?? currentID
-                }
+                (modes, currentID) = ModeMerge.merge(
+                    systemModes: modes, records: records, hidden: hidden,
+                    currentModeID: currentID, currentPrivateIndex: skyLight.currentModeIndex(for: id)
+                )
             case .untrusted(let reason):
                 status = .untrusted(reason: reason)
             }
@@ -118,7 +108,7 @@ public struct SystemDisplayService: DisplayControlling {
         guard case .trusted(_, let hidden) = PrivateModeValidator.validate(
             records: skyLight.records(for: display), against: systemModes
         ) else { return nil }
-        return hidden.first { $0.modeID == modeID }?.index
+        return ModeMerge.privateIndex(ofHiddenMode: modeID, in: hidden)
     }
 
     // MARK: - CoreGraphics helpers
