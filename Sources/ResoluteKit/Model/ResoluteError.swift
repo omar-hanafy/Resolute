@@ -25,6 +25,8 @@ public enum ResoluteError: Error, Equatable, Sendable {
     case overridesBusy
     /// A command-line mistake found after parsing.
     case usage(String)
+    /// The override file is not what it was when the change was based on it.
+    case overrideChanged(path: String)
 }
 
 extension ResoluteError: LocalizedError {
@@ -76,6 +78,8 @@ extension ResoluteError: LocalizedError {
             "Another Resolute command has been editing overrides for too long. Try again when it has finished."
         case .needsRoot:
             "Writing display overrides needs administrator rights. Run the command with sudo, or use the Resolute app."
+        case .overrideChanged(let path):
+            "\(path) changed after Resolute read it, so it was left as it is. Look at the new version, then make the change again."
         }
     }
 }

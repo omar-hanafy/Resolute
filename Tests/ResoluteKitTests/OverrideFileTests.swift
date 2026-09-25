@@ -233,6 +233,21 @@ import Testing
         }
     }
 
+    /// Two of the files macOS 27 ships hold a list of overrides, each chosen by display
+    /// properties such as IODisplayIsDigital.
+    @Test func saysWhyAListOfOverridesCannotBeEdited() throws {
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [["IODisplayOverrideMatching": ["IODisplayIsDigital": true]]], format: .xml, options: 0
+        )
+        let expected = ResoluteError.overrideUnreadable(
+            path: "DisplayVendorID-10ac/DisplayProductID-a0c4",
+            reason: "it holds several overrides that macOS chooses between by display properties, which Resolute can’t edit"
+        )
+        #expect(throws: expected) {
+            try DisplayOverride(key: key, propertyList: data)
+        }
+    }
+
     @Test func namesFilesInLowercaseHex() {
         #expect(key.relativePath == "DisplayVendorID-10ac/DisplayProductID-a0c4")
         #expect(OverrideKey(vendorDirectory: "DisplayVendorID-DB4", productFile: "DisplayProductID-3401")

@@ -44,6 +44,13 @@ public struct OverrideLocations: Hashable, Sendable {
     }
 }
 
+/// What an override's file held when it was read, so that a change based on it can check
+/// that nothing changed the file in the meantime.
+public enum OverrideFileState: Hashable, Sendable {
+    case absent
+    case contents(Data)
+}
+
 /// Reads override files.
 public struct OverrideStore: Sendable {
     /// Where an editable override came from.
@@ -54,6 +61,14 @@ public struct OverrideStore: Sendable {
         case system
         /// No file exists yet.
         case missing
+    }
+
+    /// An override to edit, where it came from, and what the installed file (the one a
+    /// save replaces) held when it was read.
+    public struct EditableOverride: Sendable {
+        public var override: DisplayOverride
+        public var source: Source
+        public var installedState: OverrideFileState
     }
 
     public var locations: OverrideLocations
@@ -70,14 +85,32 @@ public struct OverrideStore: Sendable {
         try read(locations.systemFile(for: key), key: key)
     }
 
-    /// What editing starts from: the installed override, else Apple's file, else nothing.
-    public func editableOverride(for key: OverrideKey) throws -> (override: DisplayOverride, source: Source) {
-        if let installed = try installedOverride(for: key) { return (installed, .installed) }
-        if let system = try systemOverride(for: key) { return (system, .system) }
-        return (DisplayOverride(key: key), .missing)
+    /// What the installed file holds now, for a change based on it (see `OverrideInstaller`).
+    public func installedState(for key: OverrideKey) throws -> OverrideFileState {
+        try contents(of: locations.userFile(for: key)).map(OverrideFileState.contents) ?? .absent
     }
 
-    /// Displays with an override under the user root.
+    /// What editing starts from: the installed override, else Apple's file, else nothing,
+    /// with the installed file's state from the same read.
+    public func editableFile(for key: OverrideKey) throws -> EditableOverride {
+        let installed = locations.userFile(for: key)
+        if let data = try contents(of: installed) {
+            return EditableOverride(override: try parse(data, key: key, at: installed), source: .installed, installedState: .contents(data))
+        }
+        if let system = try systemOverride(for: key) {
+            return EditableOverride(override: system, source: .system, installedState: .absent)
+        }
+        return EditableOverride(override: DisplayOverride(key: key), source: .missing, installedState: .absent)
+    }
+
+    /// What editing starts from: the installed override, else Apple's file, else nothing.
+    public func editableOverride(for key: OverrideKey) throws -> (override: DisplayOverride, source: Source) {
+        let file = try editableFile(for: key)
+        return (file.override, file.source)
+    }
+
+    /// Displays with an override under the user root, by the names macOS reads: on a
+    /// case-sensitive volume, "DisplayVendorID-DB4" is not the lowercase name macOS looks for.
     public func installedKeys() -> [OverrideKey] {
         let fileManager = FileManager.default
         guard let vendors = try? fileManager.contentsOfDirectory(atPath: locations.userRoot.path(percentEncoded: false)) else {
@@ -89,22 +122,78 @@ public struct OverrideStore: Sendable {
             let products = (try? fileManager.contentsOfDirectory(atPath: directory.path(percentEncoded: false))) ?? []
             keys += products.compactMap { OverrideKey(vendorDirectory: vendor, productFile: $0) }
         }
+        return Set(keys).filter { key in
+            fileManager.fileExists(atPath: locations.userFile(for: key).path(percentEncoded: false))
+        }.sorted()
+    }
+
+    // MARK: - Backups
+
+    /// Backups of `key`'s override, newest first.
+    public func backups(for key: OverrideKey) -> [OverrideBackup] {
+        let folder = locations.backupFolder(for: key)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false))) ?? []
+        return names.compactMap { name -> OverrideBackup? in
+            let file = folder.appending(path: name, directoryHint: .notDirectory)
+            // Only regular files: a link could point anywhere.
+            let type = try? FileManager.default.attributesOfItem(atPath: file.path(percentEncoded: false))[.type] as? FileAttributeType
+            guard type == .typeRegular else { return nil }
+            return OverrideBackup(key: key, file: file)
+        }.sorted { ($0.date, $0.sequence) > ($1.date, $1.sequence) }
+    }
+
+    /// Displays that have backups.
+    public func backupKeys() -> [OverrideKey] {
+        let fileManager = FileManager.default
+        guard let vendors = try? fileManager.contentsOfDirectory(atPath: locations.backupRoot.path(percentEncoded: false)) else {
+            return []
+        }
+        var keys = Set<OverrideKey>()
+        for vendor in vendors {
+            let folder = locations.backupRoot.appending(path: vendor, directoryHint: .isDirectory)
+            for name in (try? fileManager.contentsOfDirectory(atPath: folder.path(percentEncoded: false))) ?? [] {
+                // "DisplayProductID-3401-20260921-141320.plist" names product 3401.
+                let product = name.split(separator: "-", maxSplits: 2).prefix(2).joined(separator: "-")
+                guard let key = OverrideKey(vendorDirectory: vendor, productFile: product), !keys.contains(key),
+                      !backups(for: key).isEmpty
+                else { continue }
+                keys.insert(key)
+            }
+        }
         return keys.sorted()
     }
 
+    /// A backup's bytes, and the override they hold; throws when they are not one.
+    public func contents(of backup: OverrideBackup) throws -> (override: DisplayOverride, data: Data) {
+        guard let data = try contents(of: backup.file) else {
+            throw ResoluteError.overrideUnreadable(path: backup.file.path(percentEncoded: false), reason: "it no longer exists")
+        }
+        return (try parse(data, key: backup.key, at: backup.file), data)
+    }
+
+    // MARK: - Reading
+
     private func read(_ url: URL, key: OverrideKey) throws -> DisplayOverride? {
+        try contents(of: url).map { try parse($0, key: key, at: url) }
+    }
+
+    /// The bytes at `url`, or nil when nothing is there.
+    private func contents(of url: URL) throws -> Data? {
         let path = url.path(percentEncoded: false)
         var isFolder: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) else { return nil }
         guard !isFolder.boolValue else {
             throw ResoluteError.overrideUnreadable(path: path, reason: "it is a folder, not a file")
         }
-        let data: Data
         do {
-            data = try Data(contentsOf: url)
+            return try Data(contentsOf: url)
         } catch {
             throw ResoluteError.overrideUnreadable(path: path, reason: Self.readFailure(error))
         }
+    }
+
+    private func parse(_ data: Data, key: OverrideKey, at url: URL) throws -> DisplayOverride {
+        let path = url.path(percentEncoded: false)
         do {
             return try DisplayOverride(key: key, propertyList: data)
         } catch ResoluteError.overrideUnreadable(_, let reason) {
@@ -123,5 +212,61 @@ public struct OverrideStore: Sendable {
             return String(cString: strerror(Int32(posix.code))).lowercased()
         }
         return error.localizedDescription
+    }
+}
+
+/// A copy of an override file that an install or a removal replaced. Its name says when:
+/// "DisplayProductID-3401-20260921-141320.plist", in UTC so that names sort by time
+/// whatever the time zone, with "-2", "-3" and so on for later backups in the same second.
+public struct OverrideBackup: Hashable, Sendable, Identifiable {
+    public var key: OverrideKey
+    public var file: URL
+    public var date: Date
+    /// 1 for the first backup made in a second, 2 for the next, and so on.
+    public var sequence: Int
+
+    public var id: URL { file }
+    public var fileName: String { file.lastPathComponent }
+
+    init(key: OverrideKey, file: URL, date: Date, sequence: Int) {
+        self.key = key
+        self.file = file
+        self.date = date
+        self.sequence = sequence
+    }
+
+    /// Reads a backup's name; nil for any other file.
+    init?(key: OverrideKey, file: URL) {
+        let name = file.lastPathComponent
+        let prefix = key.productFileName + "-"
+        guard name.hasPrefix(prefix), name.hasSuffix(".plist") else { return nil }
+        let stamp = name.dropFirst(prefix.count).dropLast(".plist".count)
+        let parts = stamp.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2 || parts.count == 3,
+              let date = Self.date(from: parts[0] + "-" + parts[1])
+        else { return nil }
+        var sequence = 1
+        if parts.count == 3 {
+            // The installer counts from 2, without leading zeros.
+            guard let number = Int(parts[2]), number >= 2, String(number) == parts[2] else { return nil }
+            sequence = number
+        }
+        self.init(key: key, file: file, date: date, sequence: sequence)
+    }
+
+    private static func date(from stamp: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        guard let date = formatter.date(from: stamp), formatter.string(from: date) == stamp else { return nil }
+        return date
+    }
+}
+
+extension OverrideLocations {
+    /// Where backups of `key`'s override go.
+    public func backupFolder(for key: OverrideKey) -> URL {
+        backupRoot.appending(path: key.vendorDirectoryName, directoryHint: .isDirectory)
     }
 }

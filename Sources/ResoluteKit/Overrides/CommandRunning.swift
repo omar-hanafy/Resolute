@@ -18,17 +18,32 @@ public struct ShellCommandRunner: CommandRunning {
 public struct AdminCommandRunner: CommandRunning {
     /// What the password dialog says; without it macOS names osascript.
     public var prompt: String
+    /// False only in tests, which run the same AppleScript without a password prompt.
+    let withAdministratorPrivileges: Bool
 
     public init(prompt: String = "Resolute wants to change a display override in /Library/Displays.") {
+        self.init(prompt: prompt, withAdministratorPrivileges: true)
+    }
+
+    init(prompt: String, withAdministratorPrivileges: Bool) {
         self.prompt = prompt
+        self.withAdministratorPrivileges = withAdministratorPrivileges
     }
 
     public func run(_ script: String) async throws {
-        let source = AppleScript.doShellScript(script, withAdministratorPrivileges: true, prompt: prompt)
+        let source = AppleScript.doShellScript(
+            script, withAdministratorPrivileges: withAdministratorPrivileges, prompt: withAdministratorPrivileges ? prompt : nil
+        )
         do {
             try await Subprocess.run("/usr/bin/osascript", arguments: ["-e", source])
-        } catch ResoluteError.commandFailed(_, let message) where Self.isCancellation(message) {
-            throw ResoluteError.cancelled
+        } catch ResoluteError.commandFailed(let status, let message) {
+            if Self.isCancellation(message) { throw ResoluteError.cancelled }
+            // osascript exits with 1 whatever the script did; the script's own status and
+            // message are in its report.
+            guard let failure = AppleScript.executionError(in: message) else {
+                throw ResoluteError.commandFailed(status: status, message: message)
+            }
+            throw ResoluteError.commandFailed(status: failure.status, message: failure.message)
         }
     }
 
@@ -56,6 +71,23 @@ public enum AppleScript {
         if let prompt { statement += " with prompt " + string(prompt) }
         if withAdministratorPrivileges { statement += " with administrator privileges" }
         return statement
+    }
+
+    /// A failed `do shell script`, as osascript reports it.
+    public struct ExecutionError: Equatable, Sendable {
+        public var message: String
+        public var status: Int32
+    }
+
+    /// Reads osascript's report of a failed script, "0:47: execution error: <message>
+    /// (<status>)", where the status is the script's exit status.
+    public static func executionError(in report: String) -> ExecutionError? {
+        let text = report.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let marker = text.range(of: "execution error: "), text.hasSuffix(")"),
+              let open = text.range(of: " (", options: .backwards), open.lowerBound >= marker.upperBound,
+              let status = Int32(text[open.upperBound..<text.index(before: text.endIndex)])
+        else { return nil }
+        return ExecutionError(message: String(text[marker.upperBound..<open.lowerBound]), status: status)
     }
 
     /// An AppleScript string literal.

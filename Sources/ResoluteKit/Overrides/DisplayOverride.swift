@@ -105,6 +105,12 @@ public struct DisplayOverride: Equatable, Sendable {
     public init(key: OverrideKey, propertyList data: Data) throws {
         let object = try PropertyListSerialization.propertyList(from: data, format: nil)
         guard var dictionary = object as? [String: Any] else {
+            if let list = object as? [[String: Any]], !list.isEmpty {
+                throw ResoluteError.overrideUnreadable(
+                    path: key.relativePath,
+                    reason: "it holds several overrides that macOS chooses between by display properties, which Resolute can’t edit"
+                )
+            }
             throw ResoluteError.overrideUnreadable(path: key.relativePath, reason: "the file is not a dictionary")
         }
         var productName: String?
