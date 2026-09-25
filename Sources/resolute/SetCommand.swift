@@ -137,6 +137,8 @@ struct SetCommand: ParsableCommand, ContextCommand {
         case .reverted(let modeID):
             let restored = display.modes.first { $0.modeID == modeID }
             context.write("Kept the previous mode: \(restored.map(Output.describe) ?? "mode \(modeID)").")
+        case .restorePending(let pending):
+            throw ResoluteError.revertFailed(display: pending.displayName)
         }
     }
 

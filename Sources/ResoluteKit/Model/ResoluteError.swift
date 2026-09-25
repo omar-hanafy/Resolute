@@ -25,6 +25,8 @@ public enum ResoluteError: Error, Equatable, Sendable {
     case overridesBusy
     /// A command-line mistake found after parsing.
     case usage(String)
+    /// The person kept a mode on trial, but the display went away before it was saved.
+    case displayWentAway(display: String)
 }
 
 extension ResoluteError: LocalizedError {
@@ -76,6 +78,8 @@ extension ResoluteError: LocalizedError {
             "Another Resolute command has been editing overrides for too long. Try again when it has finished."
         case .needsRoot:
             "Writing display overrides needs administrator rights. Run the command with sudo, or use the Resolute app."
+        case .displayWentAway(let display):
+            "\(display) went away before the new mode could be saved, so it was not saved. If the display comes back in that mode, it lasts until you log out."
         }
     }
 }

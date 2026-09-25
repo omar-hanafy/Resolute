@@ -13,8 +13,11 @@ final class ModeChangeCoordinator {
 
     func apply(modeID: Int32, to displayID: CGDirectDisplayID, needsConfirmation: Bool) {
         do {
-            _ = try ModeSwitcher(service: service).apply(modeID: modeID, to: displayID, trial: needsConfirmation) {
+            let outcome = try ModeSwitcher(service: service).apply(modeID: modeID, to: displayID, trial: needsConfirmation) {
                 ConfirmationPanel.keepNewMode(countdown: RevertCountdown()) ? .keep : .revert
+            }
+            if case .restorePending(let pending) = outcome {
+                throw ResoluteError.revertFailed(display: pending.displayName)
             }
         } catch {
             Alerts.show(error, title: "The display mode could not be changed")

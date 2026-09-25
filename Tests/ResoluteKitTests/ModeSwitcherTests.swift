@@ -117,3 +117,102 @@ import Testing
         #expect(service.calls.isEmpty)
     }
 }
+
+/// A display that cannot show a mode may lose its link during the countdown and
+/// reconnect, possibly still in the mode on trial.
+@Suite struct DisplayThatGoesAwayTests {
+    typealias Call = FakeDisplayService.Call
+
+    let base = FakeDisplayService(display: TestData.fullHD(currentModeID: 2))
+    let service: ReconnectingDisplays
+    /// Mode 2 was in use before the trial; mode 1 is the display's default.
+    let pending = ModeSwitcher.PendingRestore(displayID: 2, displayName: "Full HD Monitor", modeID: 2, fallbackModeID: 1)
+
+    init() {
+        service = ReconnectingDisplays(base, displayID: 2)
+    }
+
+    @Test func putsThePreviousModeBackWhenTheDisplayReturns() throws {
+        let switcher = ModeSwitcher(service: service)
+        let outcome = try switcher.apply(modeID: 90, to: 2, trial: true) {
+            service.disconnect()
+            return .revert
+        }
+        #expect(outcome == .restorePending(pending))
+        #expect(try switcher.finish(pending) == .waiting)
+        service.reconnect()
+        #expect(try switcher.finish(pending) == .restored(to: 2))
+        #expect(base.calls == [Call(modeID: 90, scope: .session), Call(modeID: 2, scope: .session)])
+    }
+
+    @Test func waitsWithoutChangingAnythingWhileTheDisplayStaysAway() throws {
+        let switcher = ModeSwitcher(service: service)
+        let outcome = try switcher.apply(modeID: 90, to: 2, trial: true) {
+            service.disconnect()
+            return .revert
+        }
+        #expect(outcome == .restorePending(pending))
+        for _ in 1...3 {
+            #expect(try switcher.finish(pending) == .waiting)
+        }
+        #expect(base.calls == [Call(modeID: 90, scope: .session)])
+    }
+
+    /// A display that drops off right after the switch never reports the mode, so the
+    /// check fails; putting the previous mode back then waits for the display too.
+    @Test func putsThePreviousModeBackAfterAModeThatNeverShowed() throws {
+        service.disconnect(whenSwitchedTo: 90)
+        let switcher = ModeSwitcher(service: service)
+        var asked = false
+        let outcome = try switcher.apply(modeID: 90, to: 2, trial: true) {
+            asked = true
+            return .keep
+        }
+        #expect(!asked)
+        #expect(outcome == .restorePending(pending))
+        service.reconnect()
+        #expect(try switcher.finish(pending) == .restored(to: 2))
+    }
+
+    @Test func fallsBackToTheDefaultModeWhenTheReturningDisplayRefusesThePreviousOne() throws {
+        let refusing = FakeDisplayService(display: TestData.fullHD(currentModeID: 2), refusing: [2])
+        let service = ReconnectingDisplays(refusing, displayID: 2)
+        let switcher = ModeSwitcher(service: service)
+        _ = try switcher.apply(modeID: 90, to: 2, trial: true) {
+            service.disconnect(forSnapshots: 1)
+            return .revert
+        }
+        #expect(try switcher.finish(pending) == .restored(to: 1))
+    }
+
+    @Test func explainsWhenTheReturningDisplayTakesNoModeBack() throws {
+        let refusing = FakeDisplayService(display: TestData.fullHD(currentModeID: 2), refusing: [1, 2])
+        let service = ReconnectingDisplays(refusing, displayID: 2)
+        let switcher = ModeSwitcher(service: service)
+        _ = try switcher.apply(modeID: 90, to: 2, trial: true) {
+            service.disconnect(forSnapshots: 1)
+            return .revert
+        }
+        #expect(throws: ResoluteError.revertFailed(display: "Full HD Monitor")) {
+            try switcher.finish(pending)
+        }
+    }
+
+    /// Nothing will save the mode later, so the person hears about it now.
+    @Test func saysAKeptModeWasNotSavedWhenTheDisplayWentAway() throws {
+        let switcher = ModeSwitcher(service: service)
+        #expect(throws: ResoluteError.displayWentAway(display: "Full HD Monitor")) {
+            try switcher.apply(modeID: 90, to: 2, trial: true) {
+                service.disconnect()
+                return .keep
+            }
+        }
+        #expect(base.calls == [Call(modeID: 90, scope: .session)])
+    }
+
+    @Test func revertsStraightAwayWhenTheDisplayStays() throws {
+        let outcome = try ModeSwitcher(service: service).apply(modeID: 90, to: 2, trial: true) { .revert }
+        #expect(outcome == .reverted(to: 2))
+        #expect(base.calls == [Call(modeID: 90, scope: .session), Call(modeID: 2, scope: .session)])
+    }
+}
