@@ -170,6 +170,41 @@ import Testing
     }
 }
 
+/// Records the order things happen in.
+actor EventLog {
+    private(set) var events: [String] = []
+
+    func add(_ event: String) {
+        events.append(event)
+    }
+}
+
+@Suite struct OverrideLockTests {
+    @Test func letsOneEditRunAtATime() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lock = OverrideLock(file: root.appending(path: "Resolute/overrides.lock"))
+        let log = EventLog()
+        async let first: Void = lock.withLock {
+            await log.add("first in")
+            try? await Task.sleep(for: .milliseconds(300))
+            await log.add("first out")
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        async let second: Void = lock.withLock {
+            await log.add("second in")
+            await log.add("second out")
+        }
+        _ = await (first, second)
+        #expect(await log.events == ["first in", "first out", "second in", "second out"])
+    }
+
+    @Test func sitsBesideTheBackups() {
+        #expect(OverrideLocations.standard.lockFile.path(percentEncoded: false)
+            == "/Library/Application Support/Resolute/overrides.lock")
+    }
+}
+
 @Suite struct CommandRunnerTests {
     /// Twice as many waiting commands as the Mac has cores: if each held one of the Swift
     /// concurrency pool's threads, as a pending password prompt would, no other task could
