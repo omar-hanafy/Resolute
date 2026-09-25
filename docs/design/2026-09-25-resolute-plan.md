@@ -10,6 +10,26 @@
 
 **Spec:** `docs/design/2026-09-25-resolute-design.md`
 
+## Execution notes (2026-09-25)
+
+The code blocks below are where implementation started. The shipped code differs where
+execution or review required it; the most visible differences:
+
+- The editor uses a plain `HStack` split, not `NavigationSplitView` (hosted in an
+  `NSWindow`, the split view sized itself to the table's ideal height and pushed content
+  out of the window), and `--render-editor` captures the real window, hidden below the
+  desktop picture, with ScreenCaptureKit.
+- `build-app.sh` re-stamps the SDK version (SwiftPM recorded the deployment target).
+- The privileged install script carries the file contents itself (base64) and renames a
+  temporary file over the destination under `umask 022`; no user-writable staging file.
+- Backups get a numeric suffix when several are made within one second.
+- `ModeSwitcher` (library) runs hidden-mode trials for both the app and the CLI; the CLI
+  prompts for 15 seconds in a terminal.
+- The validator also compares IO flags and checks the bit depth against the pixel
+  encoding; the hidden-mode merge lives in `ModeMerge`.
+- The editor asks before discarding unsaved changes, locks while saving, and the app
+  installs a hidden main menu for the standard shortcuts.
+
 ## Global Constraints
 
 - `swift-tools-version: 6.0`; `platforms: [.macOS(.v14)]`; Swift 6 language mode with strict concurrency, no warnings suppressed.
