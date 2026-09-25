@@ -83,6 +83,25 @@ public struct DisplayMode: Hashable, Sendable, Codable, Identifiable {
 
     /// "3456 × 2234"
     public var pixelSizeText: String { "\(pixelWidth) × \(pixelHeight)" }
+
+    enum CodingKeys: String, CodingKey {
+        case modeID, privateIndex, width, height, pixelWidth, pixelHeight, refreshRate, bitsPerSample, ioFlags, origin
+    }
+
+    /// Every key, with null for what is unknown, so JSON output always has the same shape.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(modeID, forKey: .modeID)
+        try container.encode(privateIndex, forKey: .privateIndex)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+        try container.encode(pixelWidth, forKey: .pixelWidth)
+        try container.encode(pixelHeight, forKey: .pixelHeight)
+        try container.encode(refreshRate, forKey: .refreshRate)
+        try container.encode(bitsPerSample, forKey: .bitsPerSample)
+        try container.encode(ioFlags, forKey: .ioFlags)
+        try container.encode(origin, forKey: .origin)
+    }
 }
 
 /// Comparing and formatting refresh rates.

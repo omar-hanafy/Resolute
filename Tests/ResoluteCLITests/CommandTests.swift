@@ -308,7 +308,7 @@ import Testing
         #expect(apples["kind"] as? String == "hidpi")
         #expect(apples["pixelWidth"] as? Int == 2560)
         #expect(apples["keptAsIs"] as? Bool == true)
-        #expect(apples["flags"] == nil)
+        #expect(apples["flags"] is NSNull)
     }
 
     @Test(arguments: [["overrides", "add", "100x100"], ["overrides", "add", "1600x1000", "--flags", "8,a00000"], ["overrides", "add", "abc"], ["overrides", "remove", "abc"]])
@@ -423,5 +423,61 @@ import Testing
         ] {
             #expect(ResoluteCommand.unknownCommandMessage(for: arguments) == nil, "\(arguments)")
         }
+    }
+}
+
+/// Every documented key is always present, null when there is no value, so scripts and
+/// typed decoders can rely on the shape documented in docs/json.md.
+@Suite struct JSONShapeTests {
+    func object(_ json: String) throws -> [String: Any] {
+        try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    }
+
+    let modeKeys: Set<String> = [
+        "modeID", "privateIndex", "width", "height", "pixelWidth", "pixelHeight", "refreshRate", "bitsPerSample", "ioFlags", "origin",
+    ]
+
+    @Test func givesEveryDisplayKey() async throws {
+        var unknown = Sample.monitor
+        unknown.currentModeID = nil
+        let output = try await resolute(["displays", "--json"], service: FakeDisplays([Sample.builtIn, unknown])).output
+        let displays = try #require(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]])
+        let keys: Set<String> = [
+            "index", "id", "name", "vendorID", "productID", "serialNumber", "isMain", "isBuiltin", "isInMirrorSet",
+            "currentMode", "modeCount", "hiddenModeCount", "hiddenModes",
+        ]
+        #expect(displays.allSatisfy { Set($0.keys) == keys })
+        #expect(displays[1]["currentMode"] is NSNull)
+        let current = try #require(displays[0]["currentMode"] as? [String: Any])
+        #expect(Set(current.keys) == modeKeys)
+        #expect(current["privateIndex"] is NSNull)
+    }
+
+    @Test func givesEveryModeKey() async throws {
+        var unknown = Sample.monitor
+        unknown.currentModeID = nil
+        let list = try object(try await resolute(["modes", "--json", "-d", "dell"], service: FakeDisplays([unknown])).output)
+        #expect(Set(list.keys) == ["display", "displayID", "currentModeID", "hiddenModes", "modes"])
+        #expect(list["currentModeID"] is NSNull)
+        let modes = try #require(list["modes"] as? [[String: Any]])
+        #expect(modes.allSatisfy { Set($0.keys) == modeKeys })
+    }
+
+    @Test func givesEveryOverrideKey() async throws {
+        let root = try stagedRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let staged = ["--root", root.path(percentEncoded: false)]
+        let empty = try object(try await resolute(["overrides", "show", "--json", "--vendor", "fff0", "--product", "fff1"] + staged).output)
+        #expect(Set(empty.keys) == [
+            "vendorID", "productID", "path", "source", "connectedDisplay", "connectedDisplayID", "productName", "entries", "problem",
+        ])
+        for key in ["connectedDisplay", "connectedDisplayID", "productName", "problem"] {
+            #expect(empty[key] is NSNull, "\(key)")
+        }
+        try await resolute(["overrides", "add", "2560x1440@1x"] + staged)
+        let added = try object(try await resolute(["overrides", "show", "--json"] + staged).output)
+        let entry = try #require((added["entries"] as? [[String: Any]])?.first)
+        #expect(Set(entry.keys) == ["kind", "width", "height", "pixelWidth", "pixelHeight", "flags", "keptAsIs", "summary"])
+        #expect(entry["flags"] is NSNull)
     }
 }

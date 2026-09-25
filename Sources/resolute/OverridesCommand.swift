@@ -396,6 +396,22 @@ struct OverrideSummary: Encodable {
             keptAsIs = !entry.isEditable
             summary = entry.summary
         }
+
+        enum CodingKeys: String, CodingKey {
+            case kind, width, height, pixelWidth, pixelHeight, flags, keptAsIs, summary
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(kind, forKey: .kind)
+            try container.encode(width, forKey: .width)
+            try container.encode(height, forKey: .height)
+            try container.encode(pixelWidth, forKey: .pixelWidth)
+            try container.encode(pixelHeight, forKey: .pixelHeight)
+            try container.encode(flags, forKey: .flags)
+            try container.encode(keptAsIs, forKey: .keptAsIs)
+            try container.encode(summary, forKey: .summary)
+        }
     }
 
     let vendorID: String
@@ -443,6 +459,23 @@ struct OverrideSummary: Encodable {
                 display: display, problem: error.localizedDescription
             )
         }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case vendorID, productID, path, source, connectedDisplay, connectedDisplayID, productName, entries, problem
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(vendorID, forKey: .vendorID)
+        try container.encode(productID, forKey: .productID)
+        try container.encode(path, forKey: .path)
+        try container.encode(source, forKey: .source)
+        try container.encode(connectedDisplay, forKey: .connectedDisplay)
+        try container.encode(connectedDisplayID, forKey: .connectedDisplayID)
+        try container.encode(productName, forKey: .productName)
+        try container.encode(entries, forKey: .entries)
+        try container.encode(problem, forKey: .problem)
     }
 
     var text: String {

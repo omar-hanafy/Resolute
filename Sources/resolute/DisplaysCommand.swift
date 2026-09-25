@@ -32,7 +32,8 @@ struct DisplaysCommand: ParsableCommand, ContextCommand {
     }
 }
 
-/// A display without its full mode list, for `displays --json`.
+/// A display without its full mode list, for `displays --json`. Like every JSON object the
+/// commands print, it has every key, with null for a missing value.
 struct DisplaySummary: Encodable {
     let index: Int
     let id: UInt32
@@ -63,5 +64,27 @@ struct DisplaySummary: Encodable {
         modeCount = display.modes.count
         hiddenModeCount = display.hiddenModeCount
         hiddenModes = Output.hiddenModes(display)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case index, id, name, vendorID, productID, serialNumber, isMain, isBuiltin, isInMirrorSet, currentMode, modeCount,
+             hiddenModeCount, hiddenModes
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(index, forKey: .index)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(vendorID, forKey: .vendorID)
+        try container.encode(productID, forKey: .productID)
+        try container.encode(serialNumber, forKey: .serialNumber)
+        try container.encode(isMain, forKey: .isMain)
+        try container.encode(isBuiltin, forKey: .isBuiltin)
+        try container.encode(isInMirrorSet, forKey: .isInMirrorSet)
+        try container.encode(currentMode, forKey: .currentMode)
+        try container.encode(modeCount, forKey: .modeCount)
+        try container.encode(hiddenModeCount, forKey: .hiddenModeCount)
+        try container.encode(hiddenModes, forKey: .hiddenModes)
     }
 }

@@ -102,4 +102,17 @@ struct ModeList: Encodable {
         hiddenModes = Output.hiddenModes(display)
         self.modes = modes
     }
+
+    enum CodingKeys: String, CodingKey {
+        case display, displayID, currentModeID, hiddenModes, modes
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(display, forKey: .display)
+        try container.encode(displayID, forKey: .displayID)
+        try container.encode(currentModeID, forKey: .currentModeID)
+        try container.encode(hiddenModes, forKey: .hiddenModes)
+        try container.encode(modes, forKey: .modes)
+    }
 }
