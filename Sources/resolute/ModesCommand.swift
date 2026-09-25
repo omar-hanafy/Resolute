@@ -44,15 +44,12 @@ struct ModesCommand: ParsableCommand, ContextCommand {
                     let number = RefreshRate.format(rate).replacingOccurrences(of: " Hz", with: "")
                     return isCurrent && RefreshRate.key(rate) == display.currentMode?.refreshKey ? number + "*" : number
                 }
-                var notes: [String] = []
-                if group.isDefault { notes.append("default") }
-                if group.isNative { notes.append("native") }
                 return [
                     isCurrent ? "*" : " ",
                     group.sizeText,
                     group.isHiDPI ? "\(group.pixelSizeText) px" : "",
                     rates.isEmpty ? "" : rates.joined(separator: ", ") + " Hz",
-                    notes.joined(separator: ", "),
+                    group.badge ?? "",
                 ]
             }
             context.write(Output.table(rows, indent: "  "))

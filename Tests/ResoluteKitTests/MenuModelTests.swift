@@ -62,7 +62,8 @@ import Testing
     @Test func showsModeIDsAndHiddenModesWithDetails() throws {
         let fullHD = TestData.fullHD()
         let plain = try #require(item(MenuModel.build(displays: [fullHD], settings: MenuSettings()), titled: "1920 × 1080")?.submenu)
-        #expect(item(plain, titled: "Hold ⌥ to Show Hidden Modes (2)")?.isEnabled == false)
+        // Two hidden modes, but one is a 75 Hz rate of a listed resolution: ⌥ adds one resolution.
+        #expect(item(plain, titled: "Hold ⌥ to Show Hidden Resolutions (1)")?.isEnabled == false)
         #expect(!plain.contains(.header("Hidden")))
 
         let detailed = try #require(item(
@@ -73,6 +74,31 @@ import Testing
         let hidden = try #require(item(detailed, titled: "2560 × 1440  #91"))
         #expect(hidden.action == .applyMode(displayID: 2, modeID: 91, needsConfirmation: true))
         #expect(hidden.symbolName == "exclamationmark.triangle")
+    }
+
+    @Test func pointsAtHiddenRefreshRatesWhenThereAreNoHiddenResolutions() throws {
+        var fullHD = TestData.fullHD()
+        fullHD.modes.removeAll { $0.modeID == 91 }
+        let submenu = try #require(item(MenuModel.build(displays: [fullHD], settings: MenuSettings()), titled: "1920 × 1080")?.submenu)
+        #expect(item(submenu, titled: "Hold ⌥ to Show Hidden Refresh Rates")?.isEnabled == false)
+        fullHD.modes.removeAll { $0.origin == .hidden }
+        let none = try #require(item(MenuModel.build(displays: [fullHD], settings: MenuSettings()), titled: "1920 × 1080")?.submenu)
+        #expect(!none.contains { node in
+            if case .item(let item) = node { return item.title.hasPrefix("Hold ⌥") }
+            return false
+        })
+    }
+
+    /// The menu and `resolute modes` label a resolution the same way: Default wins over Native.
+    @Test func badgesAResolutionOnce() {
+        let group = { (flags: UInt32) in
+            ResolutionGroup(key: .init(width: 1728, height: 1117, pixelWidth: 3456, pixelHeight: 2234), modes: [
+                TestData.mode(1, 1728, 1117, scale: 2, flags: flags),
+            ])
+        }
+        #expect(group(0x0200_0007).badge == "Default")
+        #expect(group(0x0200_0003).badge == "Native")
+        #expect(group(0x3).badge == nil)
     }
 
     @Test func explainsWhyHiddenModesAreMissing() throws {

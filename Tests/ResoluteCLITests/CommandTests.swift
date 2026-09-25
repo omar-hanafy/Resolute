@@ -38,10 +38,10 @@ import Testing
         #expect(transcript.output == """
             Built-in Retina Display: 6 modes
               HiDPI
-              *  1728 × 1117  3456 × 2234 px  120*, 60 Hz  default, native
+              *  1728 × 1117  3456 × 2234 px  120*, 60 Hz  Default
                  1496 × 967   2992 × 1934 px  120, 60 Hz
               Low Resolution (1×)
-                 3456 × 2234    120, 60 Hz  native
+                 3456 × 2234    120, 60 Hz  Native
             """)
     }
 

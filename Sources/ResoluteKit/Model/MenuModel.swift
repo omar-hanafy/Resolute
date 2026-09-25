@@ -210,7 +210,7 @@ public enum MenuModel {
                 nodes.append(.item(MenuItem(
                     title: group.sizeText + idSuffix(mode, settings),
                     subtitle: settings.showsDetails && group.isHiDPI ? "\(group.pixelSizeText) pixels" : nil,
-                    badge: group.isDefault ? "Default" : group.isNative ? "Native" : nil,
+                    badge: group.badge,
                     symbolName: group.isHidden ? "exclamationmark.triangle" : nil,
                     isChecked: group.key == currentKey,
                     action: .applyMode(displayID: display.id, modeID: mode.modeID, needsConfirmation: mode.origin == .hidden)
@@ -221,16 +221,22 @@ public enum MenuModel {
             nodes.append(.item(MenuItem(title: "No Modes Available", isEnabled: false)))
         }
         nodes.append(.separator)
-        if !settings.showsDetails, display.hiddenModeCount > 0 {
-            nodes.append(.item(MenuItem(
-                title: "Hold ⌥ to Show Hidden Modes (\(display.hiddenModeCount))", isEnabled: false
-            )))
+        if !settings.showsDetails, let hint = hiddenModesHint(for: display) {
+            nodes.append(.item(MenuItem(title: hint, isEnabled: false)))
         }
         if settings.showsDetails, case .untrusted(let reason) = display.privateModes {
             nodes.append(.item(MenuItem(title: "Hidden Modes Unavailable", subtitle: reason, isEnabled: false)))
         }
         nodes.append(.item(MenuItem(title: "Custom Resolutions…", action: .openCustomResolutions(displayID: display.id))))
         return nodes
+    }
+
+    /// What holding ⌥ adds to this submenu: resolutions only hidden modes offer, counted as
+    /// the menu lists them; failing those, refresh rates of listed resolutions.
+    static func hiddenModesHint(for display: Display) -> String? {
+        let hiddenResolutions = ModeCatalog.groups(display.modes).filter(\.isHidden).count
+        if hiddenResolutions > 0 { return "Hold ⌥ to Show Hidden Resolutions (\(hiddenResolutions))" }
+        return display.hiddenModeCount > 0 ? "Hold ⌥ to Show Hidden Refresh Rates" : nil
     }
 
     private static func render(_ nodes: [MenuNode], depth: Int) -> [String] {

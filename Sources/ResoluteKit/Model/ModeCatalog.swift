@@ -37,6 +37,8 @@ public struct ResolutionGroup: Hashable, Sendable, Identifiable {
     public var isNative: Bool { modes.contains(where: \.isNative) }
     public var sizeText: String { "\(key.width) × \(key.height)" }
     public var pixelSizeText: String { "\(key.pixelWidth) × \(key.pixelHeight)" }
+    /// The one label the menu and `resolute modes` give it: Default wins over Native.
+    public var badge: String? { isDefault ? "Default" : isNative ? "Native" : nil }
 
     /// Distinct refresh rates, highest first.
     public var refreshRates: [Double] {
