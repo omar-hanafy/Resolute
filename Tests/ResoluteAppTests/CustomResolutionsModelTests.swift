@@ -494,6 +494,153 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         #expect(try installed(OverrideKey(display: first), under: root) == nil)
     }
 
+    // MARK: - Coming back to the window
+
+    @Test func readsAChangedFileAgainWithoutAsking() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        model.selectedEntries = [hd]
+        try install(theirs, under: root)
+
+        model.refresh()
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+        #expect(model.selectedEntries.isEmpty)
+        #expect(!model.changedOnDisk)
+        #expect(model.conflict == nil)
+        #expect(model.notice == nil)
+    }
+
+    /// Unsaved edits stay, with a banner; Save then asks first.
+    @Test func keepsUnsavedChangesWhenTheFileChanged() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runner = CountingRunner()
+        let model = try editWhileAnotherToolWrites(root: root, runner: runner)
+        let ours = try #require(model.draft?.working)
+
+        model.refresh()
+        #expect(model.changedOnDisk)
+        #expect(model.hasChanges)
+        #expect(model.draft?.working == ours)
+        await model.save()
+        #expect(model.conflict?.change == .save)
+        #expect(runner.runs == 0)
+        model.cancelConflict()
+
+        // The banner's Reload drops the edits and opens the new version.
+        model.reloadFromDisk()
+        #expect(!model.changedOnDisk)
+        #expect(!model.hasChanges)
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+    }
+
+    @Test func dropsTheBannerWhenTheFileIsBackToWhatWasOpened() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = OverrideLocations.staged(at: root).userFile(for: OverrideKey(display: first))
+        let model = try editWhileAnotherToolWrites(root: root, runner: CountingRunner())
+        model.refresh()
+        #expect(model.changedOnDisk)
+
+        try DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]).propertyListData().write(to: file)
+        model.refresh()
+        #expect(!model.changedOnDisk)
+        #expect(model.hasChanges)
+    }
+
+    /// Without unsaved changes the only version left to go back to is the new one.
+    @Test func revertingAfterTheFileChangedOpensTheNewVersion() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try editWhileAnotherToolWrites(root: root, runner: CountingRunner())
+        model.refresh()
+
+        model.revert()
+        #expect(!model.hasChanges)
+        #expect(!model.changedOnDisk)
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+    }
+
+    @Test func savingAnywayDropsTheBanner() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try editWhileAnotherToolWrites(root: root, runner: CountingRunner())
+        model.refresh()
+        await model.save()
+        await model.proceed(with: try #require(model.conflict))
+        #expect(!model.changedOnDisk)
+        model.refresh()
+        #expect(!model.changedOnDisk)
+        #expect(!model.hasChanges)
+    }
+
+    /// Choosing the display again, from the menu or the list, reads its file again.
+    @Test func readsTheOverrideAgainWhenItsDisplayIsChosenAgain() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        try install(theirs, under: root)
+        model.select(displayID: first.id)
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+
+        model.requestSelection(OverrideKey(display: second))
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [qhd]), under: root)
+        model.requestSelection(OverrideKey(display: first))
+        #expect(model.rows.map(\.entry) == [qhd])
+        #expect(!model.changedOnDisk)
+    }
+
+    @Test func refreshesWhichDisplaysHaveOverrides() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        #expect(model.source == .missing)
+        let unplugged = OverrideKey(vendorID: 0x610, productID: 0xA050)
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        try install(DisplayOverride(key: unplugged, productName: "Old Monitor", resolutions: [qhd]), under: root)
+
+        model.refresh()
+        #expect(model.targets.first { $0.key == OverrideKey(display: first) }?.hasOverride == true)
+        #expect(model.targets.first { $0.key == unplugged }?.name == "Old Monitor")
+        // The selected display's new file is read too.
+        #expect(model.source == .installed)
+        #expect(model.rows.map(\.entry) == [hd])
+    }
+
+    @Test func readsAnUnreadableFileAgainOnceItIsFixed() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = OverrideLocations.staged(at: root).userFile(for: OverrideKey(display: first))
+        try stageUnreadable(.notAPropertyList, at: file)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        #expect(model.readFailure != nil)
+
+        try DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]).propertyListData().write(to: file)
+        model.refresh()
+        #expect(model.readFailure == nil)
+        #expect(model.rows.map(\.entry) == [hd])
+    }
+
+    @Test func leavesEverythingAloneWhileSaving() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = Gate()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: GatedRunner(gate: gate))
+        _ = model.add(hd)
+        let save = Task { await model.save() }
+        while !model.isWorking { await Task.yield() }
+        try install(theirs, under: root)
+        model.refresh()
+        #expect(!model.changedOnDisk)
+        await gate.open()
+        await save.value
+        // The script refused to replace the new file, so the save asks.
+        #expect(model.conflict?.change == .save)
+    }
+
     // MARK: - Unreadable overrides
 
     enum Breakage: CaseIterable, Sendable {

@@ -146,6 +146,31 @@ private struct InstalledOverrideActions: View {
     }
 }
 
+/// Says the file changed on disk under unsaved changes, which stay until Reload.
+private struct ChangedOnDiskBanner: View {
+    let model: CustomResolutionsModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("This override changed on disk after you opened it.")
+                Text("Your changes are still here. Saving asks before it replaces the new version.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Reload") { model.reloadFromDisk() }
+                .help("Discard your changes and open the version on disk")
+        }
+        .padding(10)
+        .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
+    }
+}
+
 private struct OverrideEditor: View {
     @Bindable var model: CustomResolutionsModel
     @State private var isAdding = false
@@ -159,6 +184,10 @@ private struct OverrideEditor: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
+            }
+
+            if model.changedOnDisk {
+                ChangedOnDiskBanner(model: model)
             }
 
             LabeledContent("Name shown by macOS") {

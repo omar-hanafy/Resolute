@@ -123,6 +123,9 @@ final class CustomResolutionsModel {
     private(set) var pendingSelection: OverrideKey?
     /// A change waiting for the person to decide, because the file changed on disk.
     private(set) var conflict: Conflict?
+    /// True when the installed file changed after it was read while there are unsaved
+    /// changes: the editor keeps them and shows a banner, and Save asks first.
+    private(set) var changedOnDisk = false
     var notice: Notice?
 
     @ObservationIgnored private let service: any DisplayControlling
@@ -218,9 +221,14 @@ final class CustomResolutionsModel {
     }
 
     /// Switches to `key`; when that would lose unsaved changes it sets `pendingSelection`
-    /// instead, so the window can ask first.
+    /// instead, so the window can ask first. Choosing the selected display again reads it
+    /// again.
     func requestSelection(_ key: OverrideKey?) {
-        guard !isWorking, let key, key != selection else { return }
+        guard !isWorking, let key else { return }
+        guard key != selection else {
+            refresh()
+            return
+        }
         if hasChanges {
             pendingSelection = key
         } else {
@@ -251,11 +259,36 @@ final class CustomResolutionsModel {
         requestSelection(OverrideKey(display: display))
     }
 
+    /// Reads the displays and the selected override again, for a window that comes back
+    /// into use: another app or `resolute` may have changed them meanwhile. A changed file
+    /// is read again, unless there are unsaved changes, which stay, under a banner.
+    func refresh() {
+        // A pending decision about the file stays as it was shown.
+        guard !isWorking, conflict == nil else { return }
+        reloadTargets()
+        guard let selection else { return }
+        // An override that could not be read has nothing to lose.
+        guard draft != nil else {
+            load()
+            return
+        }
+        guard (try? store.installedState(for: selection)) != installedState else {
+            changedOnDisk = false
+            return
+        }
+        if hasChanges {
+            changedOnDisk = true
+        } else {
+            load()
+        }
+    }
+
     /// Reads the selected display's override, and what its installed file holds, afresh.
     private func load() {
         selectedEntries = []
         readFailure = nil
         conflict = nil
+        changedOnDisk = false
         guard let selection else {
             draft = nil
             installedState = nil
@@ -307,6 +340,11 @@ final class CustomResolutionsModel {
 
     func revert() {
         guard !isWorking else { return }
+        // The version the edits started from is gone, so going back opens the new one.
+        guard !changedOnDisk else {
+            load()
+            return
+        }
         draft?.revert()
         selectedEntries = []
     }
@@ -382,6 +420,7 @@ final class CustomResolutionsModel {
                     draft?.markSaved()
                     source = .installed
                     installedState = .contents(data)
+                    changedOnDisk = false
                 }
                 notice = Notice(
                     title: "Custom resolutions saved",
