@@ -1,10 +1,13 @@
-.PHONY: build test live-test app install uninstall icon clean
+.PHONY: build test lint live-test app install uninstall icon clean
 
 build:
 	swift build
 
 test:
 	swift test
+
+lint:
+	shellcheck Scripts/*.sh
 
 # Also switches the main display's refresh rate for a moment and back.
 live-test:
