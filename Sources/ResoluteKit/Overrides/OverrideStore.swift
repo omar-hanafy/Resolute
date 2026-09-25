@@ -94,13 +94,34 @@ public struct OverrideStore: Sendable {
 
     private func read(_ url: URL, key: OverrideKey) throws -> DisplayOverride? {
         let path = url.path(percentEncoded: false)
-        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) else { return nil }
+        guard !isFolder.boolValue else {
+            throw ResoluteError.overrideUnreadable(path: path, reason: "it is a folder, not a file")
+        }
+        let data: Data
         do {
-            return try DisplayOverride(key: key, propertyList: Data(contentsOf: url))
+            data = try Data(contentsOf: url)
+        } catch {
+            throw ResoluteError.overrideUnreadable(path: path, reason: Self.readFailure(error))
+        }
+        do {
+            return try DisplayOverride(key: key, propertyList: data)
         } catch ResoluteError.overrideUnreadable(_, let reason) {
             throw ResoluteError.overrideUnreadable(path: path, reason: reason)
         } catch {
             throw ResoluteError.overrideUnreadable(path: path, reason: "it is not a valid property list")
         }
+    }
+
+    /// Why a file could not be read, to follow "Could not read <path>: ".
+    static func readFailure(_ error: Error) -> String {
+        if (error as? CocoaError)?.code == .fileReadNoPermission {
+            return "you don’t have permission to read it"
+        }
+        if let posix = (error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError, posix.domain == NSPOSIXErrorDomain {
+            return String(cString: strerror(Int32(posix.code))).lowercased()
+        }
+        return error.localizedDescription
     }
 }

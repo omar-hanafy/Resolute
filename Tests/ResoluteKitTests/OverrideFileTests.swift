@@ -218,6 +218,34 @@ import Testing
         }
     }
 
+    @Test(.enabled(if: geteuid() != 0, "root can read any file"))
+    func saysWhenAFileCannotBeOpened() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = OverrideStore(locations: .staged(at: root))
+        let url = store.locations.userFile(for: key)
+        try write(rdmOverrideXML, to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path(percentEncoded: false))
+        let expected = ResoluteError.overrideUnreadable(
+            path: url.path(percentEncoded: false), reason: "you don’t have permission to read it"
+        )
+        #expect(throws: expected) {
+            try store.installedOverride(for: key)
+        }
+    }
+
+    @Test func saysWhenAFolderIsInTheWay() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = OverrideStore(locations: .staged(at: root))
+        let url = store.locations.userFile(for: key)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let expected = ResoluteError.overrideUnreadable(path: url.path(percentEncoded: false), reason: "it is a folder, not a file")
+        #expect(throws: expected) {
+            try store.installedOverride(for: key)
+        }
+    }
+
     @Test func pointsAtTheStandardLocations() {
         #expect(OverrideLocations.standard.userFile(for: key).path(percentEncoded: false)
             == "/Library/Displays/Contents/Resources/Overrides/DisplayVendorID-db4/DisplayProductID-3401")
