@@ -151,7 +151,8 @@ import Testing
 
     @Test func distrustsConflictingHiddenRecordsWithTheSameModeID() throws {
         var duplicated = records
-        var duplicate = try #require(records.last ?? nil)
+        let last: PrivateModeRecord? = try #require(records.last)
+        var duplicate = try #require(last)
         duplicate.index = Int32(records.count)
         duplicate.refreshRate += 10
         duplicated.append(duplicate)

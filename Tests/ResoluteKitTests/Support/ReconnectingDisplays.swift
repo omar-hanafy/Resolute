@@ -88,10 +88,10 @@ final class ReconnectingDisplays: DisplayControlling, @unchecked Sendable {
                     snapshotsAway = nil
                 }
             }
-            guard let remaining = snapshotsAway else { return (true, shown) }
-            guard remaining > 0 else { return (false, shown) }
+            guard let remaining = snapshotsAway else { return (true, self.shown) }
+            guard remaining > 0 else { return (false, self.shown) }
             snapshotsAway = remaining - 1
-            return (true, shown)
+            return (true, self.shown)
         }
         return base.displays().compactMap { display in
             guard display.id == displayID else { return display }
@@ -112,7 +112,9 @@ final class ReconnectingDisplays: DisplayControlling, @unchecked Sendable {
 
     func currentModeID(of displayID: CGDirectDisplayID) -> Int32? {
         guard displayID == self.displayID else { return base.currentModeID(of: displayID) }
-        let (away, shown) = lock.withLock { (snapshotsAway != 0, shown) }
+        let (away, shown) = lock.withLock { () -> (Bool, Shown) in
+            (snapshotsAway != 0, self.shown)
+        }
         if away { return Self.placeholder.modeID }
         switch shown {
         case .asWrapped: return base.currentModeID(of: displayID)
