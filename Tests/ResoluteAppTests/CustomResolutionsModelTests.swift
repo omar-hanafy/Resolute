@@ -801,6 +801,23 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         return data
     }
 
+    /// A backup of a file Resolute can't edit can still be put back, as it is.
+    @Test func restoresABackupItCannotShow() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let listed = try PropertyListSerialization.data(
+            fromPropertyList: [["DisplayProductName": "One"], ["DisplayProductName": "Two"]], format: .xml, options: 0
+        )
+        _ = try stageBackup(nil, at: "141320", under: root, bytes: listed)
+        let model = makeModel(root: root, displays: StubDisplays([first]))
+        let choice = try #require(model.backupChoices().first)
+        #expect(choice.canRestore)
+        #expect(choice.detail.hasPrefix("Can't show its entries: it holds several overrides"))
+        #expect(choice.rows.isEmpty)
+        await model.restore(choice)
+        #expect(try Data(contentsOf: OverrideLocations.staged(at: root).userFile(for: OverrideKey(display: first))) == listed)
+    }
+
     @Test func listsBackupsNewestFirstWithWhatEachHolds() throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

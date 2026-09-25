@@ -102,8 +102,8 @@ final class CustomResolutionsModel {
     /// A backup Restore Backup… offers, read when the list opens.
     struct BackupChoice: Identifiable, Equatable {
         var backup: OverrideBackup
-        /// The override the backup holds, and its bytes, which a restore writes as they are.
-        var contents: (override: DisplayOverride, data: Data)?
+        /// The backup's bytes, which a restore writes as they are, and the override they hold.
+        var contents: BackupContents?
         /// Why the backup can't be read; it is listed, but cannot be chosen.
         var failure: String?
         /// What the installed file held for the editor when the list was read: the file
@@ -115,7 +115,8 @@ final class CustomResolutionsModel {
 
         /// "2 entries · sets the name “Studio”", or why it can't be read.
         var detail: String {
-            guard let override = contents?.override else { return "Can't be read: \(failure ?? "unknown reason")" }
+            guard let contents else { return "Can't be read: \(failure ?? "unknown reason")" }
+            guard let override = contents.override else { return "Can't show its entries: \(contents.problem ?? "unknown reason")" }
             let count = override.resolutions.count
             let entries = count == 1 ? "1 entry" : "\(count) entries"
             let name = override.productName.map { "sets the name “\($0)”" } ?? "keeps the display's own name"
@@ -124,7 +125,7 @@ final class CustomResolutionsModel {
 
         /// The backup's entries, as the table shows them.
         var rows: [Row] {
-            (contents?.override.resolutions ?? []).map { Row(entry: $0) }
+            (contents?.override?.resolutions ?? []).map { Row(entry: $0) }
         }
 
         /// When the backup was made. Its name has the time in UTC; people read their own.
@@ -508,7 +509,7 @@ final class CustomResolutionsModel {
         return store.backups(for: selection).map { backup in
             var choice = BackupChoice(backup: backup, replacing: installedState)
             do {
-                choice.contents = try store.contents(of: backup)
+                choice.contents = try store.restorableContents(of: backup)
             } catch ResoluteError.overrideUnreadable(_, let reason) {
                 choice.failure = reason
             } catch {

@@ -579,6 +579,23 @@ import Testing
         }
     }
 
+    /// A backup of a file Resolute can't edit is listed as such, and put back as it is.
+    @Test func restoresABackupItCannotShow() async throws {
+        let root = try stagedRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let staged = ["--root", root.path(percentEncoded: false)]
+        let store = OverrideStore(locations: .staged(at: root))
+        let folder = store.locations.backupFolder(for: key)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let listed = try PropertyListSerialization.data(
+            fromPropertyList: [["DisplayProductName": "One"], ["DisplayProductName": "Two"]], format: .xml, options: 0
+        )
+        try listed.write(to: folder.appending(path: "\(key.productFileName)-20260921-141320.plist"))
+        #expect(try await resolute(["overrides", "backups"] + staged).output.contains("  can’t show its entries  "))
+        try await resolute(["overrides", "restore", "1"] + staged)
+        #expect(try Data(contentsOf: store.locations.userFile(for: key)) == listed)
+    }
+
     @Test func saysWhenThereAreNoBackups() async throws {
         let root = try stagedRoot()
         defer { try? FileManager.default.removeItem(at: root) }

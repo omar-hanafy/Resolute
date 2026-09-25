@@ -272,6 +272,28 @@ import Testing
         #expect(store.backupKeys() == [key])
     }
 
+    /// A restore writes a backup back as it is, so a backup of a file Resolute can't edit,
+    /// such as one listing several overrides, can still be restored. One that holds no
+    /// property list, which macOS could not read either, cannot.
+    @Test func restoresBackupsItCannotEdit() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = OverrideStore(locations: .staged(at: root))
+        let folder = store.locations.backupFolder(for: key)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let listed = try PropertyListSerialization.data(
+            fromPropertyList: [["DisplayProductName": "One"], ["DisplayProductName": "Two"]], format: .xml, options: 0
+        )
+        try listed.write(to: folder.appending(path: "\(key.productFileName)-20260921-141320.plist"))
+        try Data("not a property list".utf8).write(to: folder.appending(path: "\(key.productFileName)-20260921-141420.plist"))
+        let backups = store.backups(for: key)
+        let contents = try store.restorableContents(of: backups[1])
+        #expect(contents.data == listed)
+        #expect(contents.override == nil)
+        #expect(contents.problem?.contains("several overrides") == true)
+        #expect(throws: ResoluteError.self) { try store.restorableContents(of: backups[0]) }
+    }
+
     @Test func ordersBackupsMadeInTheSameSecond() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

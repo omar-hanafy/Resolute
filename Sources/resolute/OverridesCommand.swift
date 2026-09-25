@@ -427,7 +427,8 @@ struct RestoreBackup: AsyncParsableCommand, ContextCommand {
         let target = try target.target(in: context)
         let store = OverrideStore(locations: location.locations)
         let chosen = try Self.pick(backup, from: store.backups(for: target.key), target: target)
-        let data = try store.contents(of: chosen).data
+        // Written back as it is, so a backup Resolute cannot show is restored too.
+        let data = try store.restorableContents(of: chosen).data
         // Nothing to change needs no administrator rights, so check before asking for them.
         guard try store.installedState(for: target.key) != .contents(data) else {
             context.write(Self.alreadyMatches(chosen, target: target))
@@ -544,19 +545,25 @@ struct BackupSummary: Encodable {
     let entries: Int?
     let productName: String?
     let problem: String?
+    /// False when `restore` would refuse it: it is gone, or macOS could not read it either.
+    let isRestorable: Bool
 
     init(number: Int, backup: OverrideBackup, store: OverrideStore) {
         self.number = number
         self.backup = backup
         do {
-            let override = try store.contents(of: backup).override
-            entries = override.resolutions.count
-            productName = override.productName
-            problem = nil
+            let contents = try store.restorableContents(of: backup)
+            entries = contents.override?.resolutions.count
+            productName = contents.override?.productName
+            problem = contents.problem.map {
+                ResoluteError.overrideUnreadable(path: backup.file.path(percentEncoded: false), reason: $0).localizedDescription
+            }
+            isRestorable = true
         } catch {
             entries = nil
             productName = nil
             problem = error.localizedDescription
+            isRestorable = false
         }
     }
 
@@ -564,7 +571,7 @@ struct BackupSummary: Encodable {
 
     /// "2 entries", "1 entry, named “Studio”", or why it cannot be read.
     var contentsText: String {
-        guard let entries else { return "can’t be read" }
+        guard let entries else { return isRestorable ? "can’t show its entries" : "can’t be read" }
         let count = entries == 1 ? "1 entry" : "\(entries) entries"
         return productName.map { "\(count), named “\($0)”" } ?? count
     }

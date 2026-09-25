@@ -79,9 +79,9 @@ An array of the display's backups, newest first.
 | `number` | number | 1 for the newest, as `overrides restore` takes it. |
 | `date` | string | When the backup was made: ISO 8601, in UTC. |
 | `fileName`, `path` | string | |
-| `entries` | number or null | How many entries it holds; null when it cannot be read. |
+| `entries` | number or null | How many entries it holds; null when Resolute cannot read them. |
 | `productName` | string or null | |
-| `problem` | string or null | Why it cannot be read. |
+| `problem` | string or null | Why its entries cannot be read. `restore` still writes such a backup back as it is when it holds a property list, as a file that lists several overrides does. |
 
 ## `resolute doctor --json`
 

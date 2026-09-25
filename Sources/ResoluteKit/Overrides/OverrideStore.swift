@@ -163,6 +163,24 @@ public struct OverrideStore: Sendable {
         return keys.sorted()
     }
 
+    /// A backup's bytes, as a restore writes them back, and the override they hold when
+    /// Resolute can read one. Throws when the backup is gone, or holds no property list
+    /// macOS could read: a dictionary, or a list of them.
+    public func restorableContents(of backup: OverrideBackup) throws -> BackupContents {
+        guard let data = try contents(of: backup.file) else {
+            throw ResoluteError.overrideUnreadable(path: backup.file.path(percentEncoded: false), reason: "it no longer exists")
+        }
+        do {
+            return BackupContents(data: data, override: try parse(data, key: backup.key, at: backup.file), problem: nil)
+        } catch ResoluteError.overrideUnreadable(let path, let reason) {
+            let list = try? PropertyListSerialization.propertyList(from: data, format: nil)
+            guard list is [String: Any] || list is [Any] else {
+                throw ResoluteError.overrideUnreadable(path: path, reason: reason)
+            }
+            return BackupContents(data: data, override: nil, problem: reason)
+        }
+    }
+
     /// A backup's bytes, and the override they hold; throws when they are not one.
     public func contents(of backup: OverrideBackup) throws -> (override: DisplayOverride, data: Data) {
         guard let data = try contents(of: backup.file) else {
@@ -269,4 +287,14 @@ extension OverrideLocations {
     public func backupFolder(for key: OverrideKey) -> URL {
         backupRoot.appending(path: key.vendorDirectoryName, directoryHint: .isDirectory)
     }
+}
+
+/// A backup as a restore sees it: its bytes, and the override they hold when Resolute can
+/// read one.
+public struct BackupContents: Sendable {
+    public let data: Data
+    /// Nil when Resolute cannot edit what the bytes hold, such as a file listing several overrides.
+    public let override: DisplayOverride?
+    /// Why `override` is nil, as the reason `ResoluteError.overrideUnreadable` gives.
+    public let problem: String?
 }
