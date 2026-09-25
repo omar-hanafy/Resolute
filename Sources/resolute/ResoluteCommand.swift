@@ -9,12 +9,12 @@ struct ResoluteCommand: AsyncParsableCommand {
         abstract: "List and switch display modes, including the ones macOS hides.",
         version: ResoluteVersion.string,
         subcommands: [
-            DisplaysCommand.self, ModesCommand.self, SetCommand.self, MirrorCommand.self, OverridesCommand.self,
+            DisplaysCommand.self, ModesCommand.self, SetCommand.self, MirrorCommand.self, OverridesCommand.self, DoctorCommand.self,
         ],
         defaultSubcommand: DisplaysCommand.self
     )
 
-    static let commands = ["displays", "modes", "set", "mirror", "overrides"]
+    static let commands = ["displays", "modes", "set", "mirror", "overrides", "doctor"]
     static let overridesCommands = ["list", "show", "add", "remove", "reset", "backups", "restore", "prune"]
 
     static func main() async {
@@ -107,7 +107,7 @@ struct ResoluteCommand: AsyncParsableCommand {
         if Output.looksLikeSize(first), (try? ModeQuery(resolution: first)) != nil {
             return problem + " To switch to that resolution, run “resolute set \(first)”."
         }
-        return problem + " The commands are displays, modes, set, mirror and overrides."
+        return problem + " The commands are " + commands.dropLast().joined(separator: ", ") + " and " + (commands.last ?? "") + "."
     }
 
     /// Close enough to `command` to be a slip: a prefix of three or more letters, or at

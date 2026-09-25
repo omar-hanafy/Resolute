@@ -398,7 +398,7 @@ import Testing
         #expect(ResoluteCommand.unknownCommandMessage(for: ["1496x967"])
             == "“1496x967” is not a resolute command. To switch to that resolution, run “resolute set 1496x967”.")
         #expect(ResoluteCommand.unknownCommandMessage(for: ["frobnicate"])
-            == "“frobnicate” is not a resolute command. The commands are displays, modes, set, mirror and overrides.")
+            == "“frobnicate” is not a resolute command. The commands are displays, modes, set, mirror, overrides and doctor.")
     }
 
     @Test func pointsOverridesCommandsAtOverrides() {
@@ -629,5 +629,59 @@ import Testing
         ))
         let quiet = try await resolute(["overrides", "remove", "1280x720"] + staged).output
         #expect(!quiet.contains("no longer has"))
+    }
+}
+
+@Suite struct DoctorCommandTests {
+    /// A staged root with Apple's file for the built-in panel and an RDM-style override for a
+    /// monitor that is not connected.
+    func stagedRootForDoctor() async throws -> URL {
+        let root = try stagedRootWithApplesFile()
+        let staged = ["--root", root.path(percentEncoded: false)]
+        try await resolute(["overrides", "add", "5120x2160@1x", "--vendor", "db4", "--product", "3401"] + staged)
+        try await resolute(["overrides", "add", "2560x1080", "--vendor", "db4", "--product", "3401"] + staged)
+        return root
+    }
+
+    @Test func reportsWhatABugReportNeeds() async throws {
+        let root = try await stagedRootForDoctor()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = try await resolute(
+            ["doctor", "--root", root.path(percentEncoded: false)], service: FakeDisplays([Sample.builtIn, Sample.monitor])
+        ).output
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        #expect(lines[0] == "Resolute \(ResoluteVersion.string)")
+        #expect(lines[1].hasPrefix("macOS "))
+        #expect(lines.contains("Hidden modes: the private SkyLight functions are \(SkyLight.shared == nil ? "unavailable" : "available")."))
+        #expect(lines.contains("0  Built-in Retina Display (id 1, vendor 610, product a050, serial 0, main, built-in)"))
+        #expect(lines.contains("   1728 × 1117 HiDPI (3456 × 2234 px) @ 120 Hz, mode 54"))
+        #expect(lines.contains("   6 modes, none hidden; hidden modes available"))
+        #expect(lines.contains("   Override: none installed; macOS ships one with 7 entries, named “Color LCD”"))
+        #expect(lines.contains("1  DELL P2419H (id 2, vendor 10ac, product a0c4, serial 0)"))
+        #expect(lines.contains("   5 modes, 2 hidden; hidden modes available"))
+        #expect(lines.contains("   Override: none"))
+        #expect(lines.contains("Overrides for displays that are not connected:"))
+        #expect(lines.contains("  vendor db4, product 3401: 2 entries, 1 backup"))
+        #expect(lines.last?.hasPrefix("Recent activity: log show --last 1h --predicate") == true)
+    }
+
+    @Test func reportsAsJSON() async throws {
+        let root = try await stagedRootForDoctor()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = try await resolute(["doctor", "--json", "--root", root.path(percentEncoded: false)]).output
+        let report = try #require(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+        #expect(Set(report.keys) == [
+            "version", "macOS", "model", "architecture", "translated", "privateModeFunctions", "displays", "otherOverrides",
+        ])
+        #expect(report["version"] as? String == ResoluteVersion.string)
+        let display = try #require((report["displays"] as? [[String: Any]])?.first)
+        #expect(Set(display.keys) == ["display", "override", "backups"])
+        let override = try #require(display["override"] as? [String: Any])
+        #expect(Set(override.keys) == ["source", "path", "entries", "problem"])
+        #expect(override["source"] as? String == "system")
+        #expect(override["entries"] as? Int == 7)
+        let other = try #require((report["otherOverrides"] as? [[String: Any]])?.first)
+        #expect(other["vendorID"] as? String == "db4")
+        #expect(other["backups"] as? Int == 1)
     }
 }
