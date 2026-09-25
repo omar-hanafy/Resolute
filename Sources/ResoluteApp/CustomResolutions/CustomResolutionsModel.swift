@@ -170,6 +170,8 @@ final class CustomResolutionsModel {
                 : "It was changed by another app or the resolute command."
             if hasUnsavedChanges { text += " Your changes are still here." }
             switch change {
+            case .save where removed:
+                text += " \(proceedTitle ?? "") saves them as a new file, and \(discardTitle) shows what macOS uses now."
             case .save:
                 text += " \(proceedTitle ?? "") replaces the file with them, and \(discardTitle) opens it as it is now."
             case .remove where removed:

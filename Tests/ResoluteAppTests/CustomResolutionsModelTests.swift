@@ -450,6 +450,25 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         #expect(model.notice?.title == "Override removed")
     }
 
+    @Test func saysWhenAnotherToolRemovedTheFileBeingEdited() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        _ = model.add(qhd)
+        try FileManager.default.removeItem(at: OverrideLocations.staged(at: root).userFile(for: key))
+
+        await model.save()
+        let conflict = try #require(model.conflict)
+        #expect(conflict.message == "It was removed by another app or the resolute command. Your changes are still here. "
+            + "Save Anyway saves them as a new file, and Discard My Changes shows what macOS uses now.")
+        await model.proceed(with: conflict)
+        #expect(runner.runs == 1)
+        #expect(try installed(key, under: root)?.resolutions == model.draft?.working.resolutions)
+    }
+
     /// Nothing is left to remove, so the only ways on are reading it again and Cancel.
     @Test func offersNoRemovalOfAFileAnotherToolRemoved() async throws {
         let root = try temporaryRoot()
