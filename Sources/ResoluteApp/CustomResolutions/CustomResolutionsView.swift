@@ -124,6 +124,8 @@ private struct OverrideEditor: View {
                 TableColumn("Aspect Ratio") { row in Text(row.aspectRatio).foregroundStyle(.secondary) }
                     .width(min: 70, ideal: 90)
             }
+            // Delete does what the Remove button does; nil turns it off while saving.
+            .onDeleteCommand(perform: model.canRemoveSelection ? { model.removeSelection() } : nil)
             .overlay {
                 if model.rows.isEmpty {
                     ContentUnavailableView(
@@ -145,7 +147,7 @@ private struct OverrideEditor: View {
                 } label: {
                     Label("Remove", systemImage: "minus")
                 }
-                .disabled(model.selectedEntries.isEmpty)
+                .disabled(!model.canRemoveSelection)
                 Spacer()
             }
 

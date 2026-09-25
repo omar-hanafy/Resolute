@@ -87,6 +87,9 @@ final class CustomResolutionsModel {
 
     var canSave: Bool { hasChanges && !isWorking }
 
+    /// Whether Remove and Delete are available.
+    var canRemoveSelection: Bool { !selectedEntries.isEmpty && !isWorking }
+
     /// The name macOS shows for the display; empty keeps the display's own name.
     var productName: String {
         get { draft?.working.productName ?? "" }

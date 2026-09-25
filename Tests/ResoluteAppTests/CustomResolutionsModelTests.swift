@@ -211,6 +211,28 @@ struct GatedRunner: CommandRunning {
         #expect(model.rows.map(\.entry) == [hd])
     }
 
+    /// Remove and Delete share this: offered for a selection, and never while saving.
+    @Test func removingTheSelectionWaitsForTheSave() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = Gate()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: GatedRunner(gate: gate))
+        _ = model.add(hd)
+        #expect(!model.canRemoveSelection)
+        model.selectedEntries = [hd]
+        #expect(model.canRemoveSelection)
+
+        let save = Task { await model.save() }
+        while !model.isWorking { await Task.yield() }
+        #expect(!model.canRemoveSelection)
+        model.removeSelection()
+        #expect(model.rows.map(\.entry) == [.standard(width: 3840, height: 2160), hd])
+
+        await gate.open()
+        await save.value
+        #expect(model.canRemoveSelection)
+    }
+
     /// After Remove Override… the list is read again, here from Apple's file, which has
     /// the entry that was selected.
     @Test func readingTheOverrideAgainClearsTheSelection() async throws {
