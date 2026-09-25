@@ -414,21 +414,24 @@ final class ReconnectingDisplays: DisplayControlling, @unchecked Sendable {
         #expect(event == .interrupted)
     }
 
-    /// The prompt takes Ctrl-C for "no", at once, so the trial is undone.
-    @Test func answersThePromptWithRevert() async throws {
+    /// Ctrl-C wins even when a complete positive answer is already readable. Observing
+    /// consumption of the interrupt proves the cause without timing task scheduling.
+    @Test func answersThePromptWithRevert() throws {
         var ends: [Int32] = [-1, -1]
         try #require(pipe(&ends) == 0)
         defer { ends.forEach { close($0) } }
         let interrupts = Interrupts()
-        let input = ends[0]
-        let start = ContinuousClock.now
-        async let decision = Task.detached {
-            SetCommand.askToKeep(seconds: 5, input: input, isTerminal: true, interrupts: interrupts)
-        }.value
-        try await Task.sleep(for: .milliseconds(50))
+        let answer = Array("y\n".utf8)
+        try #require(answer.withUnsafeBytes { write(ends[1], $0.baseAddress, $0.count) } == answer.count)
         interrupts.interrupt()
-        #expect(await decision == .revert)
-        #expect(ContinuousClock.now - start < .seconds(2))
+        #expect(SetCommand.askToKeep(seconds: 5, input: ends[0], isTerminal: true, interrupts: interrupts) == .revert)
+        #expect(interrupts.wait(0) == .timedOut)
+        // Recovery must start before the competing positive input is consumed.
+        let flags = fcntl(ends[0], F_GETFL)
+        try #require(flags >= 0 && fcntl(ends[0], F_SETFL, flags | O_NONBLOCK) == 0)
+        var unread = [UInt8](repeating: 0, count: answer.count)
+        #expect(read(ends[0], &unread, unread.count) == answer.count)
+        #expect(unread == answer)
     }
 
     /// The real Ctrl-C reaches the pipe while it is caught. Like the terminal's, the signal

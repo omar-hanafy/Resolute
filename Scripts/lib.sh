@@ -18,7 +18,10 @@ app_is_running() {
 unregister_login_item() {
   local app="$1" version output pid status=0 waited=0
   local by_hand="Turn it off in System Settings > General > Login Items."
-  version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist" 2>/dev/null || true)"
+  # Older plutil versions write errors to stdout; only trust a successful extraction.
+  if ! version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist" 2>/dev/null)"; then
+    version=""
+  fi
   case "$version" in
     # These builds start the whole menu-bar app for a flag they don't know.
     "" | 0.0.* | 0.1.*)
@@ -89,4 +92,3 @@ release_notes() {
     }
   ' "$2"
 }
-

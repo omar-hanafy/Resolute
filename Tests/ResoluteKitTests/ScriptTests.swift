@@ -153,6 +153,27 @@ import Testing
         if runs { #expect(ran == "--unregister-login-item\n") }
     }
 
+    /// Older plutil versions print extraction errors to stdout, so output alone cannot
+    /// establish that the installed app understands the unregister flag.
+    @Test func doesNotStartTheAppWhenVersionExtractionFailsWithOutput() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (app, marker) = try Self.fakeApp(version: nil, in: folder)
+        let script = """
+        set -e
+        source \(Self.shellQuote(Self.libPath))
+        plutil() {
+          echo 'Could not extract value, error: No value at that key path or invalid key path: CFBundleShortVersionString'
+          return 1
+        }
+        unregister_login_item \(Self.shellQuote(app.path))
+        """
+        let result = try Self.run("/bin/bash", ["-c", script])
+        #expect(result.status == 0, "\(result.output)")
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+        #expect(result.output.contains("If you turned on Launch at Login, turn it off in System Settings > General > Login Items."))
+    }
+
     // MARK: - quit_and_wait
 
     /// The app may be asking about unsaved changes when it is asked to quit; osascript

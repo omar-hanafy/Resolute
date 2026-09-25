@@ -326,28 +326,74 @@ private final class AdvancingLockClock: Clock, @unchecked Sendable {
 }
 
 @Suite struct CommandRunnerTests {
-    /// Twice as many waiting commands as the Mac has cores: if each held one of the Swift
-    /// concurrency pool's threads, as a pending password prompt would, no other task could
-    /// run until they finished.
+    /// Every shell must start and remain waiting until a Swift task releases it. A
+    /// blocking runner exhausts the pool before that task can make progress.
     @Test func waitsWithoutHoldingTheConcurrencyPool() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let release = root.appending(path: "release").path(percentEncoded: false)
-        // Released after two seconds whatever happens, so a failure cannot hang the run. A
-        // thread of its own: with the pool's threads blocked, GCD's queues starve too.
-        Thread.detachNewThread {
-            Thread.sleep(forTimeInterval: 2)
-            FileManager.default.createFile(atPath: release, contents: nil)
+        let markers = (0..<(ProcessInfo.processInfo.activeProcessorCount * 2)).map {
+            root.appending(path: "started-\($0)").path(percentEncoded: false)
         }
-        let started = ContinuousClock.now
-        let script = "while [ ! -e \(Shell.quote(release)) ]; do sleep 0.05; done"
-        let commands = (0..<(ProcessInfo.processInfo.activeProcessorCount * 2)).map { _ in
-            Task { try await ShellCommandRunner().run(script) }
+        let gate = CommandWaitGate(release: release, markers: markers)
+        defer { gate.releaseFromTask() }
+        // This thread only recovers a deadlock; using it fails the test. Successful
+        // progress has no elapsed-time assertion and includes every process startup.
+        Thread.detachNewThread { gate.watchForDeadlock() }
+        let commands = markers.map { marker in
+            Task {
+                try await ShellCommandRunner().run("""
+                    set -e
+                    : > \(Shell.quote(marker))
+                    while [ ! -e \(Shell.quote(release)) ]; do sleep 0.01; done
+                    """)
+            }
         }
-        try await Task.sleep(for: .milliseconds(300))
-        let probed = await Task { ContinuousClock.now }.value
+        while !markers.allSatisfy({ FileManager.default.fileExists(atPath: $0) }) && !gate.watchdogFired {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        gate.releaseFromTask()
         for command in commands { try await command.value }
-        #expect(probed - started < .seconds(1.5))
+        #expect(!gate.watchdogFired,
+                "The watchdog released the commands: only \(gate.startedAtTimeout) of \(markers.count) shells had started when Swift progress stopped.")
+    }
+
+    private final class CommandWaitGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private let finished = DispatchSemaphore(value: 0)
+        private let release: String
+        private let markers: [String]
+        private var released = false
+        private var rescued = false
+        private var started = 0
+
+        init(release: String, markers: [String]) {
+            self.release = release
+            self.markers = markers
+        }
+
+        var watchdogFired: Bool { lock.withLock { rescued } }
+        var startedAtTimeout: Int { lock.withLock { started } }
+
+        func releaseFromTask() {
+            lock.withLock {
+                guard !released else { return }
+                released = true
+                FileManager.default.createFile(atPath: release, contents: nil)
+                finished.signal()
+            }
+        }
+
+        func watchForDeadlock() {
+            guard finished.wait(timeout: .now() + 30) == .timedOut else { return }
+            lock.withLock {
+                guard !released else { return }
+                rescued = true
+                started = markers.filter { FileManager.default.fileExists(atPath: $0) }.count
+                released = true
+                FileManager.default.createFile(atPath: release, contents: nil)
+            }
+        }
     }
 }
 

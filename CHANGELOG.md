@@ -29,7 +29,7 @@
 - Display names are read on the main thread and remain unique when a real name already ends in a number. Ambiguous display-name selectors are rejected.
 - CLI rates and scales reject hexadecimal and exponential notation. Requests using render-buffer dimensions suggest the corresponding HiDPI logical size.
 - Privileged failures show the underlying error instead of the osascript wrapper.
-- Failed installation copies preserve the previous app. Install and uninstall preserve unrelated command-line tools and links to other installations.
+- Failed installation copies preserve the previous app. Install and uninstall preserve unrelated command-line tools and links to other installations. A failed app-version lookup cannot start an unknown app during login-item removal, including on older macOS versions that print the error to stdout.
 
 ### Changed
 
