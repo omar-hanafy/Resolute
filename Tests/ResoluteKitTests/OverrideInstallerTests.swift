@@ -75,13 +75,13 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let installer = installer(at: root)
         try await installer.install(DisplayOverride(key: key, resolutions: [.standard(width: 1920, height: 1080)]))
-        let backup = installer.backupFile(for: key)
+        let backup = installer.locations.backupRoot
+            .appending(path: "DisplayVendorID-db4/DisplayProductID-3401-20260921-141320.plist")
         #expect(!exists(backup))
         try await installer.install(DisplayOverride(key: key, resolutions: [.standard(width: 2560, height: 1440)]))
         #expect(exists(backup))
         let saved = try DisplayOverride(key: key, propertyList: Data(contentsOf: backup))
         #expect(saved.resolutions == [.standard(width: 1920, height: 1080)])
-        #expect(backup.lastPathComponent == "DisplayProductID-3401-20260921-141320.plist")
     }
 
     @Test func keepsEveryBackupMadeWithinOneSecond() async throws {
@@ -97,6 +97,24 @@ import Testing
         #expect(backups == ["DisplayProductID-3401-20260921-141320-2.plist", "DisplayProductID-3401-20260921-141320.plist"])
         let first = try DisplayOverride(key: key, propertyList: Data(contentsOf: folder.appending(path: backups[1])))
         #expect(first.resolutions == original.resolutions)
+    }
+
+    @Test func keepsEveryBackupWhenInstallsOverlap() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = installer(at: root)  // its clock never moves
+        let key = key
+        try await installer.install(DisplayOverride(key: key, resolutions: [.standard(width: 1920, height: 1080)]))
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for width in [2000, 2100, 2200, 2300, 2400] {
+                group.addTask {
+                    try await installer.install(DisplayOverride(key: key, resolutions: [.standard(width: width, height: 1200)]))
+                }
+            }
+            try await group.waitForAll()
+        }
+        let folder = installer.locations.backupRoot.appending(path: key.vendorDirectoryName)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false)).count == 5)
     }
 
     @Test func removesTheOverrideAndItsEmptyFolder() async throws {
@@ -134,11 +152,14 @@ import Testing
         let script = OverrideInstaller.installScript(
             contents: Data("hi".utf8),
             destination: URL(filePath: "/L/DisplayVendorID-1/DisplayProductID-2"),
-            backup: URL(filePath: "/B/DisplayVendorID-1/DisplayProductID-2-x.plist")
+            backupStem: URL(filePath: "/B/DisplayVendorID-1/DisplayProductID-2-x")
         )
         #expect(script == "set -e; umask 022; "
             + "if [ -f '/L/DisplayVendorID-1/DisplayProductID-2' ]; then mkdir -p '/B/DisplayVendorID-1/'; "
-            + "cp -p '/L/DisplayVendorID-1/DisplayProductID-2' '/B/DisplayVendorID-1/DisplayProductID-2-x.plist'; fi; "
+            + "n=1; backup='/B/DisplayVendorID-1/DisplayProductID-2-x'.plist; "
+            + "while ! (set -C; : > \"$backup\") 2>/dev/null; do n=$((n + 1)); [ \"$n\" -le 1000 ]; "
+            + "backup='/B/DisplayVendorID-1/DisplayProductID-2-x'-$n.plist; done; "
+            + "cp -p '/L/DisplayVendorID-1/DisplayProductID-2' \"$backup\"; fi; "
             + "mkdir -p '/L/DisplayVendorID-1/'; "
             + "incoming=$(mktemp '/L/DisplayVendorID-1/.resolute.XXXXXX'); "
             + "trap 'rm -f \"$incoming\"' EXIT; "
