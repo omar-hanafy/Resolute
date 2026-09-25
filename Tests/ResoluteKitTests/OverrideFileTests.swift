@@ -313,3 +313,47 @@ import Testing
         }
     }
 }
+
+@Suite struct OverrideRoundTripTests {
+    /// SplitMix64, so a failing case can be reproduced from the seed.
+    struct SeededGenerator: RandomNumberGenerator {
+        var state: UInt64
+
+        mutating func next() -> UInt64 {
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var value = state
+            value = (value ^ (value >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            value = (value ^ (value >> 27)) &* 0x94D0_49BB_1331_11EB
+            return value ^ (value >> 31)
+        }
+    }
+
+    func randomEntry(_ random: inout SeededGenerator) -> ScaleResolution {
+        switch Int.random(in: 0..<5, using: &random) {
+        case 0, 1:
+            return .standard(width: .random(in: 1...16_384, using: &random), height: .random(in: 1...16_384, using: &random))
+        case 2, 3:
+            let flags = HiDPIFlags(primary: UInt32.random(in: 0...UInt32.max, using: &random) | 1, secondary: .random(in: 0...UInt32.max, using: &random))
+            return .hiDPI(width: .random(in: 1...8_191, using: &random), height: .random(in: 1...8_191, using: &random), flags: flags)
+        default:
+            // Lengths Resolute never interprets, so the bytes must come back untouched.
+            let length = [9, 12, 20].randomElement(using: &random)!
+            return .preserved(.data(Data((0..<length).map { _ in UInt8.random(in: 0...255, using: &random) })))
+        }
+    }
+
+    @Test func readsBackExactlyWhatItWrites() throws {
+        let key = OverrideKey(vendorID: 0x10AC, productID: 0xA0C4)
+        var random = SeededGenerator(state: 0x5EED)
+        for _ in 0..<500 {
+            var entries: [ScaleResolution] = []
+            for _ in 0..<Int.random(in: 0...8, using: &random) {
+                let entry = randomEntry(&random)
+                if !entries.contains(entry) { entries.append(entry) }
+            }
+            let data = try DisplayOverride(key: key, resolutions: entries).propertyListData()
+            let reread = try DisplayOverride(key: key, propertyList: data)
+            #expect(reread.resolutions == ScaleResolutionCodec.canonicalOrder(entries))
+        }
+    }
+}
