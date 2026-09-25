@@ -7,16 +7,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let preferences = Preferences()
     private let loginItem = LoginItemController()
     private var statusMenu: StatusMenuController?
+    private var modeChanges: ModeChangeCoordinator?
     private var customResolutions: CustomResolutionsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Never shown for an agent app, but it gives text fields and windows their shortcuts.
         NSApp.mainMenu = MainMenu.make()
+        let modeChanges = ModeChangeCoordinator(service: service)
+        self.modeChanges = modeChanges
         statusMenu = StatusMenuController(
             service: service,
             preferences: preferences,
             loginItem: loginItem,
-            modeChanges: ModeChangeCoordinator(service: service)
+            modeChanges: modeChanges
         ) { [weak self] displayID in
             self?.showCustomResolutions(selecting: displayID)
         }
@@ -24,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
+                // A display that reconnects may have a revert waiting for it.
+                self?.modeChanges?.displaysDidChange()
                 self?.customResolutions?.displaysDidChange()
             }
         }
