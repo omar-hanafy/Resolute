@@ -36,14 +36,23 @@ enum DisplayNames {
         CGDisplayIsBuiltin(display) != 0 ? "Built-in Display" : "Display \(display)"
     }
 
-    /// Appends " (1)", " (2)", … to names that occur more than once.
+    /// Appends " (1)", " (2)", … to names that occur more than once, skipping any suffixed
+    /// name already taken, since a display can really be named "Studio (1)".
     static func disambiguate(_ names: [String]) -> [String] {
         let counts = Dictionary(names.map { ($0, 1) }, uniquingKeysWith: +)
-        var seen: [String: Int] = [:]
+        var taken = Set(names)
+        var lastNumber: [String: Int] = [:]
         return names.map { name in
             guard counts[name, default: 0] > 1 else { return name }
-            seen[name, default: 0] += 1
-            return "\(name) (\(seen[name, default: 1]))"
+            var number = lastNumber[name, default: 0]
+            var candidate: String
+            repeat {
+                number += 1
+                candidate = "\(name) (\(number))"
+            } while taken.contains(candidate)
+            lastNumber[name] = number
+            taken.insert(candidate)
+            return candidate
         }
     }
 }

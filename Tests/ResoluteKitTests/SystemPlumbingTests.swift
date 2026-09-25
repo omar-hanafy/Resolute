@@ -23,6 +23,25 @@ import Testing
     @Test func leavesDistinctNamesAlone() {
         #expect(DisplayNames.disambiguate(["A", "B"]) == ["A", "B"])
     }
+
+    /// A display really named "Studio (1)" next to two "Studio" displays got a twin.
+    @Test func skipsSuffixesAnotherDisplayIsNamedWith() {
+        #expect(DisplayNames.disambiguate(["Studio (1)", "Studio", "Studio"]) == ["Studio (1)", "Studio (2)", "Studio (3)"])
+        #expect(DisplayNames.disambiguate(["A", "A", "A (2)"]) == ["A (1)", "A (3)", "A (2)"])
+    }
+
+    @Test(arguments: [
+        ["Studio (1)", "Studio", "Studio"], ["A (1)", "A (1)", "A"], ["A", "A", "A (1)", "A (1)"],
+        ["X (2)", "X", "X", "X (1)"], ["", "", " (1)"],
+    ])
+    func alwaysGivesEveryDisplayItsOwnName(_ names: [String]) {
+        let result = DisplayNames.disambiguate(names)
+        #expect(Set(result).count == names.count)
+        // A name only one display has stays as it is.
+        for (name, given) in zip(names, result) where names.filter({ $0 == name }).count == 1 {
+            #expect(given == name)
+        }
+    }
 }
 
 @Suite struct ConfigurationScopeTests {
