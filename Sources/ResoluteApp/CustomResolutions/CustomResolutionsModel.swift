@@ -35,6 +35,33 @@ final class CustomResolutionsModel {
         }
     }
 
+    /// The note under the table when an edit leaves HiDPI entries without their 1× entry,
+    /// and the title of its button, which adds them back.
+    struct UnpairedNote: Equatable {
+        var text: String
+        var actionTitle: String
+
+        /// Names up to two entries, then counts the rest.
+        init(_ entries: [ScaleResolution]) {
+            let names = entries.map { "\($0.sizeText) \($0.kindText)" }
+            let reason = "which Resolute and RDM add with each HiDPI entry."
+            switch entries.count {
+            case 1:
+                text = "\(names[0]) no longer has its 1× entry at \(Self.pixels(entries[0])), \(reason)"
+            case 2:
+                text = "\(names[0]) and \(names[1]) no longer have their 1× entries at "
+                    + "\(Self.pixels(entries[0])) and \(Self.pixels(entries[1])), \(reason)"
+            default:
+                text = "\(names[0]), \(names[1]) and \(entries.count - 2) more no longer have their 1× entries, \(reason)"
+            }
+            actionTitle = entries.count == 1 ? "Add 1× Entry" : "Add 1× Entries"
+        }
+
+        private static func pixels(_ entry: ScaleResolution) -> String {
+            entry.pixelSize.map { "\($0.width) × \($0.height)" } ?? "its pixel size"
+        }
+    }
+
     /// A message shown in an alert.
     struct Notice: Identifiable {
         let id = UUID()
@@ -385,6 +412,22 @@ final class CustomResolutionsModel {
             return nil
         } catch {
             return error.localizedDescription
+        }
+    }
+
+    /// Shown when this edit left HiDPI entries without the 1× entry at their pixel size.
+    var unpairedNote: UnpairedNote? {
+        guard let entries = draft?.newlyUnpairedHiDPIEntries, !entries.isEmpty else { return nil }
+        return UnpairedNote(entries)
+    }
+
+    /// Adds back the 1× entries `unpairedNote` names.
+    func addMissingPartners() {
+        guard !isWorking, let entries = draft?.newlyUnpairedHiDPIEntries else { return }
+        for entry in entries {
+            guard let pixels = entry.pixelSize else { continue }
+            // One too large to add stays named in the note.
+            try? draft?.add(.standard(width: pixels.width, height: pixels.height))
         }
     }
 

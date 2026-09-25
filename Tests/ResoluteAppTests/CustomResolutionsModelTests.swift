@@ -641,6 +641,78 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         #expect(model.conflict?.change == .save)
     }
 
+    // MARK: - HiDPI entries without their 1× entry
+
+    /// Opens `first`'s override with `entries`, then removes `removed` as the table does.
+    func model(opening entries: [ScaleResolution], removing removed: [ScaleResolution], root: URL) throws -> CustomResolutionsModel {
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: entries), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        model.selectedEntries = Set(removed)
+        model.removeSelection()
+        return model
+    }
+
+    @Test func notesAHiDPIEntryThatLostIts1xEntry() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let native = ScaleResolution.standard(width: 2560, height: 1440)
+        let scaled = ScaleResolution.hiDPI(width: 1280, height: 720, flags: .standard)
+        let model = try model(opening: [native, scaled], removing: [native], root: root)
+
+        let note = try #require(model.unpairedNote)
+        #expect(note.text == "1280 × 720 HiDPI no longer has its 1× entry at 2560 × 1440, which Resolute and RDM add with each HiDPI entry.")
+        #expect(note.actionTitle == "Add 1× Entry")
+
+        model.addMissingPartners()
+        #expect(model.rows.map(\.entry) == [native, scaled])
+        #expect(!model.hasChanges)
+        #expect(model.unpairedNote == nil)
+    }
+
+    @Test func namesTwoHiDPIEntriesThatLostTheir1xEntries() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lost: [ScaleResolution] = [.standard(width: 3840, height: 2160), .standard(width: 2560, height: 1440)]
+        let model = try model(
+            opening: lost + [hd, .hiDPI(width: 1280, height: 720, flags: .standard)], removing: lost, root: root
+        )
+
+        let note = try #require(model.unpairedNote)
+        #expect(note.text == "1920 × 1080 HiDPI and 1280 × 720 HiDPI no longer have their 1× entries at 3840 × 2160 and 2560 × 1440, which Resolute and RDM add with each HiDPI entry.")
+        #expect(note.actionTitle == "Add 1× Entries")
+        model.addMissingPartners()
+        #expect(!model.hasChanges)
+    }
+
+    @Test func countsTheRestWhenMoreThanTwoLostTheir1xEntries() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lost: [ScaleResolution] = [
+            .standard(width: 5120, height: 2880), .standard(width: 3840, height: 2160),
+            .standard(width: 2560, height: 1440), .standard(width: 2048, height: 1152),
+        ]
+        let scaled: [ScaleResolution] = [qhd, hd, .hiDPI(width: 1280, height: 720, flags: .standard), .hiDPI(width: 1024, height: 576, flags: .standard)]
+        let model = try model(opening: lost + scaled, removing: lost, root: root)
+
+        #expect(model.unpairedNote?.text == "2560 × 1440 HiDPI, 1920 × 1080 HiDPI and 2 more no longer have their 1× entries, which Resolute and RDM add with each HiDPI entry.")
+        model.addMissingPartners()
+        #expect(model.unpairedNote == nil)
+        #expect(!model.hasChanges)
+    }
+
+    /// Apple's files list some HiDPI entries without one; only what this edit did counts.
+    @Test func saysNothingAboutEntriesThatWereAlreadyUnpaired() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try model(opening: [.standard(width: 1280, height: 800), hd], removing: [], root: root)
+        #expect(model.unpairedNote == nil)
+        // A HiDPI entry added and removed again takes the 1× entry it brought along.
+        _ = model.add(qhd)
+        model.selectedEntries = [qhd]
+        model.removeSelection()
+        #expect(model.unpairedNote == nil)
+    }
+
     // MARK: - Restore Backup…
 
     /// Writes a backup of `first`'s override the way the installer names them, made at

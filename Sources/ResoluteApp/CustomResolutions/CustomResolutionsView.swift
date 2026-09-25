@@ -236,6 +236,19 @@ private struct OverrideEditor: View {
                 }
             }
 
+            if let note = model.unpairedNote {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+                    Text(note.text)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button(note.actionTitle) { model.addMissingPartners() }
+                }
+            }
+
             HStack(spacing: 8) {
                 Button {
                     isAdding = true
