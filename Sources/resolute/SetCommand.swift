@@ -155,12 +155,17 @@ struct SetCommand: ParsableCommand, ContextCommand {
         context.writeError("\(pending.displayName) went away. Waiting for it to come back to restore the previous mode…")
         let deadline = ContinuousClock.now + .seconds(context.restoreTimeout)
         var progress = ModeSwitcher.RestoreProgress.waiting
+        // The failure from the last try, while the display is back; one that went away again
+        // clears it. Only the first failure is logged.
         var lastError: (any Error)?
+        var hasFailed = false
         while progress == .waiting {
             do {
-                progress = try switcher.finish(pending, logsFailures: lastError == nil)
+                progress = try switcher.finish(pending, logsFailures: !hasFailed)
+                lastError = nil
             } catch {
                 lastError = error
+                hasFailed = true
             }
             guard progress == .waiting else { break }
             guard ContinuousClock.now < deadline else {

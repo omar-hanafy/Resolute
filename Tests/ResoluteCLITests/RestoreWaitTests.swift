@@ -103,6 +103,17 @@ import Testing
             """)
     }
 
+    /// A refusal says nothing once the display has gone away again.
+    @Test func saysTheDisplayDidNotComeBackWhenItLeftAgainAfterARefusal() async {
+        let (_, service) = monitor { $0.refuse(modeID: 1, times: 1, thenGoAway: true) }
+        let result = await run(arguments, on: service) {
+            service.disconnect(forSnapshots: 3)
+            return .revert
+        }
+        #expect(result.code == 1)
+        #expect(result.message?.hasPrefix("Error: DELL P2419H did not come back in time") == true)
+    }
+
     @Test func saysWhenTheDefaultModeCameBackInstead() async {
         let (_, service) = monitor(currentModeID: 2) { $0.refuse(modeID: 2) }
         let result = await run(arguments, on: service) {
@@ -178,6 +189,9 @@ final class ReconnectingDisplays: DisplayControlling, @unchecked Sendable {
     private var drop: (modeID: Int32, snapshots: Int?)?
     /// Modes it refuses, and how many more times; nil for every time.
     private var refusals: [Int32: Int?] = [:]
+    private var goesAwayAfterRefusing = false
+    /// Snapshots left before the display goes away for good, after a refusal.
+    private var snapshotsUntilAway: Int?
 
     init(_ base: any DisplayControlling, displayID: CGDirectDisplayID) {
         self.base = base
@@ -198,9 +212,14 @@ final class ReconnectingDisplays: DisplayControlling, @unchecked Sendable {
         lock.withLock { drop = (modeID, snapshots) }
     }
 
-    /// Makes switching the display to `modeID` fail the next `times` times, or always.
-    func refuse(modeID: Int32, times: Int? = nil) {
-        lock.withLock { refusals[modeID] = .some(times) }
+    /// Makes switching the display to `modeID` fail the next `times` times, or always. With
+    /// `thenGoAway`, the display stays for one more snapshot after a refusal and then goes
+    /// away for good.
+    func refuse(modeID: Int32, times: Int? = nil, thenGoAway: Bool = false) {
+        lock.withLock {
+            refusals[modeID] = .some(times)
+            goesAwayAfterRefusing = thenGoAway
+        }
     }
 
     private var isAway: Bool {
@@ -209,6 +228,14 @@ final class ReconnectingDisplays: DisplayControlling, @unchecked Sendable {
 
     func displays() -> [Display] {
         let (away, returning) = lock.withLock { () -> (Bool, Int32?) in
+            if let left = snapshotsUntilAway {
+                if left > 0 {
+                    snapshotsUntilAway = left - 1
+                } else {
+                    snapshotsUntilAway = nil
+                    snapshotsAway = nil
+                }
+            }
             guard let remaining = snapshotsAway else { return (true, nil) }
             guard remaining > 0 else { return (false, returningModeID) }
             snapshotsAway = remaining - 1
@@ -240,6 +267,7 @@ final class ReconnectingDisplays: DisplayControlling, @unchecked Sendable {
             } else if remaining != nil {
                 refusals.removeValue(forKey: modeID)
             }
+            if goesAwayAfterRefusing { snapshotsUntilAway = 1 }
             return true
         }
         guard !refused else { throw ResoluteError.coreGraphics(code: 1001, operation: "select the display mode") }
