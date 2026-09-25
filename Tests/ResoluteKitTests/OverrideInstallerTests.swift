@@ -194,6 +194,18 @@ import Testing
         #expect(!AdminCommandRunner.isCancellation("execution error: The command exited with a non-zero status. (-12800)"))
     }
 
+    @Test func namesResoluteInThePasswordPrompt() throws {
+        let source = AppleScript.doShellScript("true", withAdministratorPrivileges: true, prompt: #"Resolute wants "this"."#)
+        #expect(source == #"do shell script "true" with prompt "Resolute wants \"this\"." with administrator privileges"#)
+        #expect(AdminCommandRunner().prompt == "Resolute wants to change a display override in /Library/Displays.")
+        // Compiled but not run, so no password prompt appears.
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let compiled = root.appending(path: "check.scpt").path(percentEncoded: false)
+        let privileged = AppleScript.doShellScript("true", withAdministratorPrivileges: true, prompt: AdminCommandRunner().prompt)
+        try Subprocess.runAndWait("/usr/bin/osacompile", arguments: ["-o", compiled, "-e", privileged])
+    }
+
     @Test func survivesARealAppleScriptRoundTrip() throws {
         // Runs osascript without administrator rights, so no password prompt appears.
         let root = try makeTemporaryDirectory()

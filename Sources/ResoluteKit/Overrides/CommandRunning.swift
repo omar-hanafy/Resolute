@@ -16,10 +16,15 @@ public struct ShellCommandRunner: CommandRunning {
 
 /// Runs scripts as root after macOS asks for an administrator's password.
 public struct AdminCommandRunner: CommandRunning {
-    public init() {}
+    /// What the password dialog says; without it macOS names osascript.
+    public var prompt: String
+
+    public init(prompt: String = "Resolute wants to change a display override in /Library/Displays.") {
+        self.prompt = prompt
+    }
 
     public func run(_ script: String) async throws {
-        let source = AppleScript.doShellScript(script, withAdministratorPrivileges: true)
+        let source = AppleScript.doShellScript(script, withAdministratorPrivileges: true, prompt: prompt)
         do {
             try await Subprocess.run("/usr/bin/osascript", arguments: ["-e", source])
         } catch ResoluteError.commandFailed(_, let message) where Self.isCancellation(message) {
@@ -44,12 +49,18 @@ public enum Shell {
 
 /// Building AppleScript source.
 public enum AppleScript {
-    /// A `do shell script` statement that runs `script`.
-    public static func doShellScript(_ script: String, withAdministratorPrivileges: Bool) -> String {
-        let escaped = script
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "do shell script \"\(escaped)\"" + (withAdministratorPrivileges ? " with administrator privileges" : "")
+    /// A `do shell script` statement that runs `script`, with `prompt` as the password
+    /// dialog's message.
+    public static func doShellScript(_ script: String, withAdministratorPrivileges: Bool, prompt: String? = nil) -> String {
+        var statement = "do shell script " + string(script)
+        if let prompt { statement += " with prompt " + string(prompt) }
+        if withAdministratorPrivileges { statement += " with administrator privileges" }
+        return statement
+    }
+
+    /// An AppleScript string literal.
+    static func string(_ text: String) -> String {
+        "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 }
 
