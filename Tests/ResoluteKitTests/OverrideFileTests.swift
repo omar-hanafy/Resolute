@@ -286,6 +286,34 @@ import Testing
         #expect(store.installedKeys() == [key])
     }
 
+    /// On the usual case-insensitive volume, "DisplayVendorID-DB4" is the folder macOS reads
+    /// as "DisplayVendorID-db4", so it is listed.
+    @Test func listsAnUppercaseNameThatResolves() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = OverrideStore(locations: .staged(at: root))
+        try write(rdmOverrideXML, to: store.locations.userRoot.appending(path: "DisplayVendorID-DB4/DisplayProductID-3401"))
+        let resolves = FileManager.default.fileExists(atPath: store.locations.userFile(for: key).path(percentEncoded: false))
+        #expect(store.installedKeys() == (resolves ? [key] : []))
+    }
+
+    /// On a case-sensitive volume, macOS looks only for the lowercase name, so an uppercase
+    /// one is not an override it reads. Set RESOLUTE_CASE_SENSITIVE_DIR to a folder on such a
+    /// volume (for example a disk image made with `hdiutil create -fs "Case-sensitive APFS"`).
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["RESOLUTE_CASE_SENSITIVE_DIR"] != nil))
+    func ignoresAnUppercaseNameOnACaseSensitiveVolume() throws {
+        let base = URL(filePath: ProcessInfo.processInfo.environment["RESOLUTE_CASE_SENSITIVE_DIR"] ?? "", directoryHint: .isDirectory)
+        let root = base.appending(path: "case-test-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = OverrideStore(locations: .staged(at: root))
+        try write(rdmOverrideXML, to: store.locations.userRoot.appending(path: "DisplayVendorID-DB4/DisplayProductID-3401"))
+        #expect(!FileManager.default.fileExists(atPath: store.locations.userFile(for: key).path(percentEncoded: false)))
+        #expect(store.installedKeys().isEmpty)
+        try write(rdmOverrideXML, to: store.locations.userFile(for: key))
+        #expect(store.installedKeys() == [key])
+        #expect(try store.installedOverride(for: key)?.resolutions.count == 2)
+    }
+
     @Test func prefersTheInstalledOverride() throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
