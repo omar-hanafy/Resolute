@@ -268,5 +268,8 @@ import Testing
         #expect(throws: ResoluteError.invalidResolution("big")) {
             try ScaleResolution(parsing: "big")
         }
+        #expect(throws: ResoluteError.invalidResolution("4611686018427387904x1080")) {
+            try ScaleResolution(parsing: "4611686018427387904x1080")
+        }
     }
 }

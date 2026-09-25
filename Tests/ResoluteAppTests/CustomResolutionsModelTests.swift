@@ -172,7 +172,10 @@ struct GatedRunner: CommandRunning {
         #expect(size.height == 1440)
     }
 
-    @Test(arguments: [("", "1080"), ("1920", ""), ("19x0", "1080"), ("-1920", "1080"), ("0", "1080")])
+    @Test(arguments: [
+        ("", "1080"), ("1920", ""), ("19x0", "1080"), ("-1920", "1080"), ("0", "1080"),
+        ("4611686018427387904", "1080"), ("1920", "70000"),
+    ])
     func rejectsWhatIsNotASize(width: String, height: String) {
         #expect(ResolutionInput.size(width: width, height: height) == nil)
     }

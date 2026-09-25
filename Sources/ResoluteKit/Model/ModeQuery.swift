@@ -29,6 +29,20 @@ public struct ModeQuery: Hashable, Sendable {
         self.allowHidden = allowHidden
     }
 
+    /// The largest width or height a query can name. No display mode comes close, and
+    /// larger numbers would overflow the arithmetic done with sizes.
+    public static let maximumDimension = 65_535
+
+    /// Whether `hertz` could be a display's refresh rate.
+    public static func isPlausible(refreshRate hertz: Double) -> Bool {
+        hertz > 0 && hertz <= 10_000
+    }
+
+    /// Whether `scale` could be a display mode's scale (1 for low resolution, 2 for HiDPI).
+    public static func isPlausible(scale: Double) -> Bool {
+        scale > 0 && scale <= 8
+    }
+
     /// Parses "1920x1080", "1920×1080", "1920x1080@2x", "1920x1080@60" and
     /// "1920x1080@2x@59.94Hz".
     public init(resolution text: String) throws {
@@ -41,14 +55,15 @@ public struct ModeQuery: Hashable, Sendable {
         let dimensions = size.split(separator: "x", omittingEmptySubsequences: false)
         guard dimensions.count == 2,
               let width = Int(dimensions[0]), let height = Int(dimensions[1]),
-              width > 0, height > 0
+              (1...Self.maximumDimension).contains(width), (1...Self.maximumDimension).contains(height)
         else { throw ResoluteError.invalidResolution(text) }
         self.width = width
         self.height = height
         for part in parts {
-            if part.hasSuffix("x"), let scale = Double(part.dropLast()), scale > 0 {
+            if part.hasSuffix("x"), let scale = Double(part.dropLast()), Self.isPlausible(scale: scale) {
                 self.scale = scale
-            } else if let hertz = Double(part.hasSuffix("hz") ? String(part.dropLast(2)) : part), hertz > 0 {
+            } else if let hertz = Double(part.hasSuffix("hz") ? String(part.dropLast(2)) : part),
+                      Self.isPlausible(refreshRate: hertz) {
                 self.refreshRate = hertz
             } else {
                 throw ResoluteError.invalidResolution(text)
@@ -62,8 +77,11 @@ public struct ModeQuery: Hashable, Sendable {
         if let modeID { parts.append("mode \(modeID)") }
         if useDefault { parts.append("the default mode") }
         if let width, let height { parts.append("\(width) × \(height)") }
-        if let scale { parts.append(scale == scale.rounded() ? "@\(Int(scale))x" : "@\(scale)x") }
-        if let refreshRate { parts.append(RefreshRate.format(refreshRate)) }
+        if let scale {
+            let whole = scale.isFinite && abs(scale) < 1_000 && scale == scale.rounded()
+            parts.append(whole ? "@\(Int(scale))x" : "@\(scale)x")
+        }
+        if let refreshRate, case let rate = RefreshRate.format(refreshRate), !rate.isEmpty { parts.append(rate) }
         return parts.isEmpty ? "the current mode" : parts.joined(separator: " ")
     }
 

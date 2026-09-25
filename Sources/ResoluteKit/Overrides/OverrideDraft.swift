@@ -41,7 +41,8 @@ public struct OverrideDraft: Equatable, Sendable {
     static func validate(_ entry: ScaleResolution) throws {
         switch entry {
         case .hiDPI(let width, let height, let flags):
-            guard width >= 320, height >= 200, width * 2 <= maximumPixels, height * 2 <= maximumPixels else {
+            // Compared by halving the limit: doubling a huge size would overflow.
+            guard width >= 320, height >= 200, width <= maximumPixels / 2, height <= maximumPixels / 2 else {
                 throw ResoluteError.invalidEntry("HiDPI resolutions must be between 320 × 200 and 8192 × 8192.")
             }
             guard flags.primary & HiDPIFlags.hiDPIBit != 0 else {

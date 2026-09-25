@@ -94,9 +94,10 @@ struct AddResolutionSheet: View {
 /// Reads the size typed into the Add Resolution sheet.
 enum ResolutionInput {
     static func size(width: String, height: String) -> (width: Int, height: Int)? {
+        let sizes = 1...ModeQuery.maximumDimension
         guard let width = Int(width.trimmingCharacters(in: .whitespaces)),
               let height = Int(height.trimmingCharacters(in: .whitespaces)),
-              width > 0, height > 0
+              sizes.contains(width), sizes.contains(height)
         else { return nil }
         return (width, height)
     }

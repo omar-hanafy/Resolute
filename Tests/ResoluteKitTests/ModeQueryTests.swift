@@ -34,6 +34,24 @@ import Testing
         }
     }
 
+    /// Numbers no display has would overflow later arithmetic (sizes are multiplied, rates
+    /// and scales become integers), so the parser turns them away.
+    @Test(arguments: [
+        "9223372036854775807x2", "70000x1080", "1920x70000",
+        "1920x1080@1e300", "1920x1080@inf", "1920x1080@20000hz",
+        "1920x1080@1e308x", "1920x1080@infx", "1920x1080@16x",
+    ])
+    func rejectsNumbersNoDisplayHas(text: String) {
+        #expect(throws: ResoluteError.invalidResolution(text)) {
+            try ModeQuery(resolution: text)
+        }
+    }
+
+    @Test func describesAnyQueryWithoutTrapping() {
+        #expect(ModeQuery(scale: .infinity, refreshRate: .nan).summary == "@infx")
+        #expect(ModeQuery(scale: 1.5, refreshRate: 0).summary == "@1.5x")
+    }
+
     @Test func keepsTheCurrentRefreshRate() throws {
         #expect(try ModeQuery(resolution: "1496x967").resolve(on: display).modeID == 42)
     }

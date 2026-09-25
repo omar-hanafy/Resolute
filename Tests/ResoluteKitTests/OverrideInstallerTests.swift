@@ -202,6 +202,16 @@ import Testing
         #expect(draft.working.resolutions.count == 2)
     }
 
+    @Test func rejectsSizesTooLargeToDouble() {
+        var draft = OverrideDraft(DisplayOverride(key: key))
+        #expect(throws: ResoluteError.invalidEntry("HiDPI resolutions must be between 320 × 200 and 8192 × 8192.")) {
+            try draft.add(.hiDPI(width: Int.max / 2 + 1, height: 1080, flags: .standard))
+        }
+        #expect(throws: ResoluteError.invalidEntry("HiDPI resolutions must be between 320 × 200 and 8192 × 8192.")) {
+            try draft.add(.hiDPI(width: 1920, height: Int.max, flags: .standard))
+        }
+    }
+
     @Test func removesByOffsets() {
         var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [
             .standard(width: 1920, height: 1080), .standard(width: 2560, height: 1440), .standard(width: 3840, height: 2160),

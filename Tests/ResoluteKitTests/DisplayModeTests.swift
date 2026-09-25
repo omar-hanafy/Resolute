@@ -40,6 +40,13 @@ import Testing
         #expect(RefreshRate.key(60) != RefreshRate.key(59.94))
     }
 
+    @Test func refreshKeysNeverTrap() {
+        #expect(RefreshRate.key(.nan) == 0)
+        #expect(RefreshRate.key(.infinity) == 0)
+        #expect(RefreshRate.key(1e300) == 0)
+        #expect(RefreshRate.format(-.infinity) == "")
+    }
+
     @Test func displayFindsItsCurrentMode() {
         let display = TestData.fullHD(currentModeID: 2)
         #expect(display.currentMode?.refreshRate == 50)

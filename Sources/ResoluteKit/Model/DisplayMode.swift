@@ -87,9 +87,11 @@ public struct DisplayMode: Hashable, Sendable, Codable, Identifiable {
 
 /// Comparing and formatting refresh rates.
 public enum RefreshRate {
-    /// Hundredths of a hertz, so 59.94 and 59.9400024 compare equal.
+    /// Hundredths of a hertz, so 59.94 and 59.9400024 compare equal. A value no display
+    /// could have, NaN included, has key 0 like an unknown rate.
     public static func key(_ hertz: Double) -> Int {
-        Int((hertz * 100).rounded())
+        guard hertz.isFinite, abs(hertz) < 1_000_000 else { return 0 }
+        return Int((hertz * 100).rounded())
     }
 
     /// "120 Hz", "59.94 Hz", "59.9 Hz"; empty when the rate is unknown.
