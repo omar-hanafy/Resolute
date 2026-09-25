@@ -161,6 +161,15 @@ import Testing
         #expect(OverrideKey(vendorDirectory: "DisplayVendorID-610", productFile: "DisplayProductID-zz") == nil)
         #expect(OverrideKey(vendorDirectory: "DisplayVendorID-610", productFile: "DisplayProductID-a050.plist") == nil)
     }
+
+    /// macOS looks for "DisplayVendorID-ccc", never "DisplayVendorID-0ccc", so a padded name
+    /// is a file it does not read, and listing it would point at a path that does not exist.
+    @Test func ignoresNamesMacOSDoesNotLookFor() {
+        #expect(OverrideKey(vendorDirectory: "DisplayVendorID-0ccc", productFile: "DisplayProductID-1") == nil)
+        #expect(OverrideKey(vendorDirectory: "DisplayVendorID-ccc", productFile: "DisplayProductID-01") == nil)
+        #expect(OverrideKey(vendorDirectory: "DisplayVendorID-0", productFile: "DisplayProductID-0")
+            == OverrideKey(vendorID: 0, productID: 0))
+    }
 }
 
 @Suite struct OverrideStoreTests {

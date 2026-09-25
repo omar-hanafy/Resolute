@@ -41,6 +41,8 @@ public struct OverrideKey: Hashable, Sendable, Codable, Comparable, CustomString
         guard name.hasPrefix(prefix) else { return nil }
         let digits = name.dropFirst(prefix.count)
         guard !digits.isEmpty, digits.count <= 8, digits.allSatisfy(\.isHexDigit) else { return nil }
+        // macOS formats IDs without leading zeros and never reads a padded name.
+        guard digits == "0" || digits.first != "0" else { return nil }
         return UInt32(digits, radix: 16)
     }
 }
