@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 
 APP_DIR="${RESOLUTE_APP_DIR:-/Applications}"
 BIN_DIR="${RESOLUTE_BIN_DIR:-/usr/local/bin}"
-BUNDLE_ID="com.omarhanafy.Resolute"
+BUNDLE_ID="${RESOLUTE_BUNDLE_ID:-com.omarhanafy.Resolute}"
 
 [[ -d dist/Resolute.app ]] || Scripts/build-app.sh
 

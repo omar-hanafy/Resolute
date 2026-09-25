@@ -217,4 +217,272 @@ import Testing
         )
         #expect(status == 1)
     }
+
+    // MARK: - install.sh and uninstall.sh
+
+    private static let fakeBundleID = "com.example.ResoluteScriptTests"
+
+    /// Runs a program with `env` merged onto the current environment, combining stdout
+    /// and stderr.
+    @discardableResult
+    private static func run(_ executable: String, _ arguments: [String], env: [String: String]) throws
+        -> (status: Int32, output: String)
+    {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        var environment = ProcessInfo.processInfo.environment
+        for (key, value) in env { environment[key] = value }
+        process.environment = environment
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: data, as: UTF8.self))
+    }
+
+    /// A throwaway "repo" with Scripts/{install,uninstall,lib}.sh copied from the real
+    /// ones and a fake dist/Resolute.app, so install.sh never reaches build-app.sh.
+    /// `Contents/MacOS/Resolute` records its arguments to CALLS_LOG (an environment
+    /// variable `makeSandbox` sets) and prints "Launch at Login is off." for
+    /// `--unregister-login-item`, like a build that knows the flag.
+    private static func makeFakeRepo(in folder: URL, version: String) throws -> URL {
+        let repo = folder.appending(path: "repo")
+        let scripts = repo.appending(path: "Scripts")
+        try FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
+        for name in ["install.sh", "uninstall.sh", "lib.sh"] {
+            try FileManager.default.copyItem(at: scriptsDir.appending(path: name), to: scripts.appending(path: name))
+        }
+
+        let contents = repo.appending(path: "dist/Resolute.app/Contents")
+        try FileManager.default.createDirectory(at: contents.appending(path: "MacOS"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: contents.appending(path: "Helpers"), withIntermediateDirectories: true)
+
+        let info: [String: Any] = [
+            "CFBundleIdentifier": fakeBundleID,
+            "CFBundleShortVersionString": version,
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: contents.appending(path: "Info.plist"))
+
+        let binary = """
+        #!/bin/sh
+        echo "Resolute $*" >> "$CALLS_LOG"
+        if [ "$1" = "--unregister-login-item" ]; then
+          echo "Launch at Login is off."
+        fi
+        """
+        let binaryPath = contents.appending(path: "MacOS/Resolute")
+        try Data(binary.utf8).write(to: binaryPath)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binaryPath.path)
+
+        let cliPath = contents.appending(path: "Helpers/resolute")
+        try Data("#!/bin/sh\necho \"fake resolute cli $*\"\n".utf8).write(to: cliPath)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cliPath.path)
+
+        return repo
+    }
+
+    /// A bin directory with stand-ins for `osascript`, `open` and `defaults`, meant to be
+    /// put ahead of the real ones on PATH. Each appends its name and arguments to
+    /// CALLS_LOG and never calls the real tool. `osascript` answers the is-running query
+    /// from RUNNING_FILE ("true" or "false") and, when asked to quit and QUITS_FILE says
+    /// "yes", sets RUNNING_FILE to "false" so the poll in quit_and_wait sees it stop.
+    private static func makeStubBin(in folder: URL) throws -> URL {
+        let bin = folder.appending(path: "stubbin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+
+        let osascript = """
+        #!/bin/sh
+        echo "osascript $*" >> "$CALLS_LOG"
+        case "$*" in
+          *"to quit"*)
+            if [ "$(cat "$QUITS_FILE" 2>/dev/null)" = "yes" ]; then
+              echo "false" > "$RUNNING_FILE"
+            fi
+            exit 0
+            ;;
+        esac
+        cat "$RUNNING_FILE"
+        """
+        let open = """
+        #!/bin/sh
+        echo "open $*" >> "$CALLS_LOG"
+        """
+        let defaultsStub = """
+        #!/bin/sh
+        echo "defaults $*" >> "$CALLS_LOG"
+        """
+
+        for (name, body) in ["osascript": osascript, "open": open, "defaults": defaultsStub] {
+            let url = bin.appending(path: name)
+            try Data(body.utf8).write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+        return bin
+    }
+
+    /// A sandbox for install.sh/uninstall.sh: `makeFakeRepo` plus `makeStubBin` ahead of
+    /// the real tools on PATH, fake RESOLUTE_APP_DIR/RESOLUTE_BIN_DIR folders, the fake
+    /// bundle ID, and short timeouts, all as an environment ready for `run(_:_:env:)`.
+    private static func makeSandbox(
+        in folder: URL, running: Bool, quitsWhenAsked: Bool = true, version: String = "0.3.0"
+    ) throws -> (repo: URL, appDir: URL, binDir: URL, callsLog: URL, env: [String: String]) {
+        let repo = try makeFakeRepo(in: folder, version: version)
+        let stubBin = try makeStubBin(in: folder)
+        let appDir = folder.appending(path: "Applications")
+        let binDir = folder.appending(path: "bin")
+        try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+
+        let callsLog = folder.appending(path: "calls.log")
+        let runningFile = folder.appending(path: "running")
+        let quitsFile = folder.appending(path: "quits")
+        try Data().write(to: callsLog)
+        try Data((running ? "true" : "false").utf8).write(to: runningFile)
+        try Data((quitsWhenAsked ? "yes" : "no").utf8).write(to: quitsFile)
+
+        var path = stubBin.path
+        if let existing = ProcessInfo.processInfo.environment["PATH"] { path += ":\(existing)" }
+        let env = [
+            "PATH": path,
+            "CALLS_LOG": callsLog.path,
+            "RUNNING_FILE": runningFile.path,
+            "QUITS_FILE": quitsFile.path,
+            "RESOLUTE_APP_DIR": appDir.path,
+            "RESOLUTE_BIN_DIR": binDir.path,
+            "RESOLUTE_BUNDLE_ID": fakeBundleID,
+            "RESOLUTE_QUIT_TIMEOUT": "1",
+            "RESOLUTE_QUIT_POLL_INTERVAL": "0.05",
+            "RESOLUTE_UNREGISTER_TIMEOUT": "2",
+        ]
+        return (repo, appDir, binDir, callsLog, env)
+    }
+
+    /// The non-blank lines `makeStubBin`'s stand-ins and the fake Resolute binary
+    /// recorded, in the order they were called.
+    private static func calls(_ log: URL) throws -> [String] {
+        try String(contentsOf: log, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map(String.init)
+    }
+
+    @Test func installCopiesLinksAndOpensTheAppLastAfterTheQuitCheck() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let sandbox = try Self.makeSandbox(in: folder, running: false)
+
+        let result = try Self.run("/bin/bash", [sandbox.repo.appending(path: "Scripts/install.sh").path], env: sandbox.env)
+        #expect(result.status == 0, "\(result.output)")
+
+        let installedApp = sandbox.appDir.appending(path: "Resolute.app")
+        #expect(FileManager.default.fileExists(atPath: installedApp.appending(path: "Contents/Info.plist").path))
+        let link = sandbox.binDir.appending(path: "resolute")
+        let target = try FileManager.default.destinationOfSymbolicLink(atPath: link.path)
+        #expect(target == installedApp.appending(path: "Contents/Helpers/resolute").path)
+
+        let calls = try Self.calls(sandbox.callsLog)
+        let quitCheckIndex = try #require(calls.firstIndex { $0.hasPrefix("osascript") })
+        let openIndex = try #require(calls.firstIndex { $0.hasPrefix("open ") })
+        #expect(quitCheckIndex < openIndex)
+        #expect(openIndex == calls.count - 1, "open should be the last call: \(calls)")
+        #expect(calls[openIndex].contains(installedApp.path))
+    }
+
+    @Test func installReplacesAnExistingCopy() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let sandbox = try Self.makeSandbox(in: folder, running: false)
+
+        let installedApp = sandbox.appDir.appending(path: "Resolute.app")
+        try FileManager.default.createDirectory(at: installedApp.appending(path: "Contents"), withIntermediateDirectories: true)
+        try Data("stale".utf8).write(to: installedApp.appending(path: "Contents/marker"))
+
+        let result = try Self.run("/bin/bash", [sandbox.repo.appending(path: "Scripts/install.sh").path], env: sandbox.env)
+        #expect(result.status == 0, "\(result.output)")
+
+        #expect(!FileManager.default.fileExists(atPath: installedApp.appending(path: "Contents/marker").path))
+        let plist = try String(contentsOf: installedApp.appending(path: "Contents/Info.plist"), encoding: .utf8)
+        #expect(plist.contains("0.3.0"))
+    }
+
+    @Test func installStopsAndChangesNothingWhenTheAppNeverQuits() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let sandbox = try Self.makeSandbox(in: folder, running: true, quitsWhenAsked: false)
+
+        let installedApp = sandbox.appDir.appending(path: "Resolute.app")
+        try FileManager.default.createDirectory(at: installedApp.appending(path: "Contents"), withIntermediateDirectories: true)
+        try Data("previous".utf8).write(to: installedApp.appending(path: "Contents/marker"))
+
+        let result = try Self.run("/bin/bash", [sandbox.repo.appending(path: "Scripts/install.sh").path], env: sandbox.env)
+        #expect(result.status == 1)
+        #expect(result.output.contains("Resolute is still running"))
+
+        #expect(try String(contentsOf: installedApp.appending(path: "Contents/marker"), encoding: .utf8) == "previous")
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: sandbox.binDir.appending(path: "resolute").path)) == nil)
+        let calls = try Self.calls(sandbox.callsLog)
+        #expect(!calls.contains { $0.hasPrefix("open ") })
+    }
+
+    @Test func uninstallQuitsTurnsOffLoginItemThenRemovesThenDeletesPreferences() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let sandbox = try Self.makeSandbox(in: folder, running: true, quitsWhenAsked: true)
+
+        let installedApp = sandbox.appDir.appending(path: "Resolute.app")
+        try FileManager.default.copyItem(at: sandbox.repo.appending(path: "dist/Resolute.app"), to: installedApp)
+        let link = sandbox.binDir.appending(path: "resolute")
+        try FileManager.default.createSymbolicLink(
+            at: link, withDestinationURL: installedApp.appending(path: "Contents/Helpers/resolute"))
+
+        let result = try Self.run("/bin/bash", [sandbox.repo.appending(path: "Scripts/uninstall.sh").path], env: sandbox.env)
+        #expect(result.status == 0, "\(result.output)")
+        #expect(result.output.contains("Removed Resolute."))
+
+        #expect(!FileManager.default.fileExists(atPath: installedApp.path))
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) == nil)
+
+        let calls = try Self.calls(sandbox.callsLog)
+        let quitIndex = try #require(calls.firstIndex { $0.hasPrefix("osascript") && $0.contains("to quit") })
+        let loginItemIndex = try #require(calls.firstIndex { $0.hasPrefix("Resolute --unregister-login-item") })
+        let defaultsIndex = try #require(calls.firstIndex { $0.hasPrefix("defaults delete") })
+        #expect(quitIndex < loginItemIndex)
+        #expect(loginItemIndex < defaultsIndex)
+        #expect(calls[defaultsIndex].contains(Self.fakeBundleID))
+    }
+
+    @Test func uninstallLeavesAResoluteLinkThatPointsSomewhereElse() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let sandbox = try Self.makeSandbox(in: folder, running: false)
+
+        let installedApp = sandbox.appDir.appending(path: "Resolute.app")
+        try FileManager.default.copyItem(at: sandbox.repo.appending(path: "dist/Resolute.app"), to: installedApp)
+        let link = sandbox.binDir.appending(path: "resolute")
+        let elsewhere = folder.appending(path: "elsewhere")
+        try Data("elsewhere".utf8).write(to: elsewhere)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: elsewhere)
+
+        let result = try Self.run("/bin/bash", [sandbox.repo.appending(path: "Scripts/uninstall.sh").path], env: sandbox.env)
+        #expect(result.status == 0, "\(result.output)")
+
+        #expect(!FileManager.default.fileExists(atPath: installedApp.path))
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == elsewhere.path)
+    }
+
+    @Test func uninstallOfAnAppThatIsNotInstalledStillSucceeds() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let sandbox = try Self.makeSandbox(in: folder, running: false)
+
+        let result = try Self.run("/bin/bash", [sandbox.repo.appending(path: "Scripts/uninstall.sh").path], env: sandbox.env)
+        #expect(result.status == 0, "\(result.output)")
+        #expect(result.output.contains("Removed Resolute."))
+
+        let calls = try Self.calls(sandbox.callsLog)
+        #expect(!calls.contains { $0.hasPrefix("Resolute --unregister-login-item") })
+    }
 }

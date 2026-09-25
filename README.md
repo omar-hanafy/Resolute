@@ -29,6 +29,8 @@ make install
 
 `make install` builds `dist/Resolute.app` (universal, signed ad hoc), copies it to `/Applications`, links the `resolute` command into `/usr/local/bin` when that folder is writable, and opens the app. `make app` only builds; the results are in `dist/`.
 
+`make release` builds the universal app and packages `dist/Resolute-<version>.zip`, `dist/Resolute-<version>.dmg` and `dist/SHA256SUMS`. `SIGN_IDENTITY` sets the codesigning identity for `make app` and `make release` (default `-`, ad hoc; a real identity also turns on the hardened runtime). `NOTARY_PROFILE` names a keychain profile created with `xcrun notarytool store-credentials`; with it set, `make release` notarizes and staples the zip and dmg, which needs a Developer ID Application `SIGN_IDENTITY`. Without `NOTARY_PROFILE` the build is signed but not notarized, so Gatekeeper blocks a downloaded copy until you right-click it and choose Open.
+
 If you used RDM, quit it and remove it from System Settings › General › Login Items. Resolute reads the override files RDM wrote.
 
 To uninstall, run `make uninstall`. It quits the app, turns off Launch at Login, then removes the app and the command-line link. (An app older than 0.2 can't turn Launch at Login off for it, so the script says where to do that.)
@@ -96,10 +98,13 @@ make test        # unit tests (Swift Testing): the library, the command line and
 make lint        # shellcheck on the scripts
 make live-test   # also switches the main display's refresh rate for a moment and back
 make app         # dist/Resolute.app and dist/resolute
+make release     # dist/Resolute-<version>.zip, .dmg and SHA256SUMS
 make icon        # regenerates Resources/AppIcon.icns
 ```
 
 [TESTING.md](TESTING.md) lists the checks that need a person and a screen. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
+
+CI (`.github/workflows/ci.yml`) lints and runs the tests on every push and pull request, but only while the repo is public; while it's private, a run only happens when a maintainer starts one by hand.
 
 `Resolute.app/Contents/MacOS/Resolute --dump-menu` prints the menu as it would appear, and `--render-editor file.png` captures the Custom Resolutions window without showing it (the terminal needs the Screen Recording permission).
 

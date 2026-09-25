@@ -1,4 +1,4 @@
-.PHONY: build test lint live-test app install uninstall icon clean
+.PHONY: build test lint live-test app release install uninstall icon clean
 
 build:
 	swift build
@@ -15,6 +15,9 @@ live-test:
 
 app:
 	Scripts/build-app.sh
+
+release:
+	Scripts/release.sh
 
 install: app
 	Scripts/install.sh
