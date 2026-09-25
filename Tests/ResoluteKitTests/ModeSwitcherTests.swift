@@ -70,7 +70,20 @@ import Testing
             #expect(error as? ResoluteError == .modeNotApplied(display: "Full HD Monitor"))
         }
         #expect(!asked)
-        #expect(service.calls == [Call(modeID: 90, scope: .session)])
+        // Put back in case the switch lands late; if it never happened this changes nothing.
+        #expect(service.calls == [Call(modeID: 90, scope: .session), Call(modeID: 1, scope: .session)])
+    }
+
+    @Test func waitsForADisplayThatReportsTheNewModeLate() throws {
+        let service = FakeDisplayService(display: TestData.fullHD(), staleSnapshotsAfterASwitch: 3)
+        _ = service.displays()  // the snapshot taken before the switch is current
+        var asked = false
+        let outcome = try ModeSwitcher(service: service).apply(modeID: 90, to: 2, trial: true) {
+            asked = true
+            return .keep
+        }
+        #expect(asked)
+        #expect(outcome == .kept)
     }
 
     @Test func leavesTheCurrentModeAlone() throws {

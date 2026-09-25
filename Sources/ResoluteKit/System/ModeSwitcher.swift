@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// Switches display modes. A trial (used for hidden modes) is applied for the session
 /// first and saved only when someone confirms it; otherwise the previous mode returns.
@@ -46,7 +47,10 @@ public struct ModeSwitcher: Sendable {
         guard trial else { return .applied }
         // SkyLight reports no errors, so check the display really switched before asking
         // whether to keep the mode.
-        guard currentModeID(of: displayID) == modeID else {
+        guard waitUntilCurrent(modeID, on: displayID) else {
+            // Put the previous mode back in case the switch lands after all; when it never
+            // happened this changes nothing.
+            if let previous { try? service.apply(modeID: previous, to: displayID, scope: .session) }
             throw ResoluteError.modeNotApplied(display: before?.name ?? "The display")
         }
 
@@ -69,6 +73,16 @@ public struct ModeSwitcher: Sendable {
             }
             throw ResoluteError.revertFailed(display: before?.name ?? "the display")
         }
+    }
+
+    /// Whether `displayID` reports `modeID` within half a second: a display may report a
+    /// switch a moment late.
+    private func waitUntilCurrent(_ modeID: Int32, on displayID: CGDirectDisplayID) -> Bool {
+        for check in 1...6 {
+            if currentModeID(of: displayID) == modeID { return true }
+            if check < 6 { Thread.sleep(forTimeInterval: 0.1) }
+        }
+        return false
     }
 
     /// The mode `displayID` uses now. The full snapshot also knows hidden modes, which

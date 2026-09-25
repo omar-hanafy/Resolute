@@ -136,6 +136,9 @@ final class FakeDisplayService: DisplayControlling, @unchecked Sendable {
     private let ignoredModeIDs: Set<Int32>
     private let reportsCurrentMode: Bool
     private var recorded: [Call] = []
+    /// Snapshots that still show the old mode after a switch, as a slow display might.
+    private var staleSnapshots: Int
+    private var reported: Display
 
     /// `refusing` modes fail with an error; `ignoring` modes report success but leave the
     /// display as it was, as SkyLight does. `reportsCurrentMode: false` makes
@@ -145,12 +148,15 @@ final class FakeDisplayService: DisplayControlling, @unchecked Sendable {
         display: Display,
         refusing refusedModeIDs: Set<Int32> = [],
         ignoring ignoredModeIDs: Set<Int32> = [],
-        reportsCurrentMode: Bool = true
+        reportsCurrentMode: Bool = true,
+        staleSnapshotsAfterASwitch staleSnapshots: Int = 0
     ) {
         self.display = display
         self.refusedModeIDs = refusedModeIDs
         self.ignoredModeIDs = ignoredModeIDs
         self.reportsCurrentMode = reportsCurrentMode
+        self.staleSnapshots = staleSnapshots
+        reported = display
     }
 
     var calls: [Call] {
@@ -158,7 +164,14 @@ final class FakeDisplayService: DisplayControlling, @unchecked Sendable {
     }
 
     func displays() -> [Display] {
-        lock.withLock { [display] }
+        lock.withLock {
+            if staleSnapshots > 0 {
+                staleSnapshots -= 1
+                return [reported]
+            }
+            reported = display
+            return [display]
+        }
     }
 
     func currentModeID(of displayID: CGDirectDisplayID) -> Int32? {
