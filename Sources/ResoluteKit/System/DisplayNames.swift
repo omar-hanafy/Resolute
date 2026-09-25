@@ -3,16 +3,29 @@ import CoreGraphics
 
 /// Human-readable display names.
 enum DisplayNames {
-    /// Names from `NSScreen`, keyed by display ID (active displays only).
+    /// Names from `NSScreen`, keyed by display ID (active displays only). AppKit's screen
+    /// list is read on the main thread, also when the command line takes a snapshot.
     static func screenNames() -> [CGDirectDisplayID: String] {
-        var names: [CGDirectDisplayID: String] = [:]
-        for screen in NSScreen.screens {
-            let key = NSDeviceDescriptionKey("NSScreenNumber")
-            if let number = screen.deviceDescription[key] as? NSNumber {
-                names[number.uint32Value] = screen.localizedName
+        onMainThread {
+            var names: [CGDirectDisplayID: String] = [:]
+            for screen in NSScreen.screens {
+                let key = NSDeviceDescriptionKey("NSScreenNumber")
+                if let number = screen.deviceDescription[key] as? NSNumber {
+                    names[number.uint32Value] = screen.localizedName
+                }
             }
+            return names
         }
-        return names
+    }
+
+    /// Runs `body` on the main thread. From another thread it waits for the main queue,
+    /// which the app's run loop, the command line's async `main` and Swift Testing all keep
+    /// serving; it would wait forever on a main thread that is waiting for the caller.
+    static func onMainThread<T: Sendable>(_ body: @MainActor () -> T) -> T {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated(body)
+        }
+        return DispatchQueue.main.sync { MainActor.assumeIsolated(body) }
     }
 
     /// The product name CoreDisplay reports; covers mirrored and inactive displays.

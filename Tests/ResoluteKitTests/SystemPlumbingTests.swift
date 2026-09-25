@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import Testing
 @testable import ResoluteKit
 
@@ -41,6 +42,32 @@ import Testing
         for (name, given) in zip(names, result) where names.filter({ $0 == name }).count == 1 {
             #expect(given == name)
         }
+    }
+
+    /// AppKit's screen list belongs to the main thread, and the command line takes its
+    /// snapshots on other threads.
+    @Test(.timeLimit(.minutes(1))) func readsScreensOnTheMainThreadWhenAskedFromAnother() async {
+        let answers = await withCheckedContinuation { continuation in
+            Thread.detachNewThread {
+                let caller = Thread.isMainThread
+                let reader = DisplayNames.onMainThread { Thread.isMainThread }
+                continuation.resume(returning: (caller, reader))
+            }
+        }
+        #expect(answers == (false, true))
+    }
+
+    @MainActor @Test func readsScreensStraightAwayOnTheMainThread() {
+        #expect(DisplayNames.onMainThread { Thread.isMainThread })
+    }
+
+    /// Swift Testing keeps the main queue serving, so the opt-in live tests, which take
+    /// snapshots off the main thread, cannot hang on the screen names.
+    @Test(.timeLimit(.minutes(1))) func readsScreenNamesFromATestThread() async {
+        let names = await withCheckedContinuation { continuation in
+            Thread.detachNewThread { continuation.resume(returning: DisplayNames.screenNames()) }
+        }
+        #expect(Set(names.keys).isSubset(of: SystemDisplayService.onlineDisplayIDs()))
     }
 }
 
