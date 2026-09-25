@@ -111,7 +111,7 @@ make icon        # regenerates Resources/AppIcon.icns
 
 [TESTING.md](TESTING.md) lists the checks that need a person and a screen. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
 
-CI (`.github/workflows/ci.yml`) lints and runs the tests on every push and pull request, but only while the repo is public; while it's private, a run only happens when a maintainer starts one by hand.
+CI (`.github/workflows/ci.yml`) lints and runs the tests on every push to `main` and every pull request, but only while the repo is public; while it's private, a run only happens when a maintainer starts one by hand.
 
 `Resolute.app/Contents/MacOS/Resolute --dump-menu` prints the menu as it would appear, and `--render-editor file.png` captures the Custom Resolutions window without showing it (the terminal needs the Screen Recording permission); `docs/images/custom-resolutions.png` is one such capture.
 
