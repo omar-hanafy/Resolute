@@ -10,9 +10,7 @@ public struct ShellCommandRunner: CommandRunning {
     public init() {}
 
     public func run(_ script: String) async throws {
-        try await Task.detached {
-            try Subprocess.run("/bin/sh", arguments: ["-c", script])
-        }.value
+        try await Subprocess.run("/bin/sh", arguments: ["-c", script])
     }
 }
 
@@ -23,9 +21,7 @@ public struct AdminCommandRunner: CommandRunning {
     public func run(_ script: String) async throws {
         let source = AppleScript.doShellScript(script, withAdministratorPrivileges: true)
         do {
-            try await Task.detached {
-                try Subprocess.run("/usr/bin/osascript", arguments: ["-e", source])
-            }.value
+            try await Subprocess.run("/usr/bin/osascript", arguments: ["-e", source])
         } catch ResoluteError.commandFailed(_, let message) where Self.isCancellation(message) {
             throw ResoluteError.cancelled
         }
@@ -59,8 +55,19 @@ public enum AppleScript {
 
 /// Runs a program and waits for it.
 enum Subprocess {
+    /// Waits on a thread of its own. A password prompt can stay open for minutes, and
+    /// blocking one of the Swift concurrency pool's few threads that long starves other
+    /// tasks and, once the pool is full, GCD's global queues too.
+    static func run(_ executable: String, arguments: [String]) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            Thread.detachNewThread {
+                continuation.resume(with: Result { try runAndWait(executable, arguments: arguments) })
+            }
+        }
+    }
+
     /// Throws `ResoluteError.commandFailed` with the program's error output when it fails.
-    static func run(_ executable: String, arguments: [String]) throws {
+    static func runAndWait(_ executable: String, arguments: [String]) throws {
         let process = Process()
         process.executableURL = URL(filePath: executable)
         process.arguments = arguments

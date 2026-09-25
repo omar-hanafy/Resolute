@@ -66,6 +66,6 @@ struct StrictUmaskRunner: CommandRunning {
 struct UnprivilegedAppleScriptRunner: CommandRunning {
     func run(_ script: String) async throws {
         let source = AppleScript.doShellScript(script, withAdministratorPrivileges: false)
-        try Subprocess.run("/usr/bin/osascript", arguments: ["-e", source])
+        try await Subprocess.run("/usr/bin/osascript", arguments: ["-e", source])
     }
 }

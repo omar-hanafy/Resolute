@@ -149,6 +149,32 @@ import Testing
     }
 }
 
+@Suite struct CommandRunnerTests {
+    /// Twice as many waiting commands as the Mac has cores: if each held one of the Swift
+    /// concurrency pool's threads, as a pending password prompt would, no other task could
+    /// run until they finished.
+    @Test func waitsWithoutHoldingTheConcurrencyPool() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let release = root.appending(path: "release").path(percentEncoded: false)
+        // Released after two seconds whatever happens, so a failure cannot hang the run. A
+        // thread of its own: with the pool's threads blocked, GCD's queues starve too.
+        Thread.detachNewThread {
+            Thread.sleep(forTimeInterval: 2)
+            FileManager.default.createFile(atPath: release, contents: nil)
+        }
+        let started = ContinuousClock.now
+        let script = "while [ ! -e \(Shell.quote(release)) ]; do sleep 0.05; done"
+        let commands = (0..<(ProcessInfo.processInfo.activeProcessorCount * 2)).map { _ in
+            Task { try await ShellCommandRunner().run(script) }
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let probed = await Task { ContinuousClock.now }.value
+        for command in commands { try await command.value }
+        #expect(probed - started < .seconds(1.5))
+    }
+}
+
 @Suite struct QuotingTests {
     @Test func quotesForTheShell() {
         #expect(Shell.quote("it's here") == #"'it'\''s here'"#)
@@ -174,7 +200,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let marker = root.appending(path: #"it's "done""#)
         let script = "touch \(Shell.quote(marker.path(percentEncoded: false)))"
-        try Subprocess.run("/usr/bin/osascript", arguments: ["-e", AppleScript.doShellScript(script, withAdministratorPrivileges: false)])
+        try Subprocess.runAndWait("/usr/bin/osascript", arguments: ["-e", AppleScript.doShellScript(script, withAdministratorPrivileges: false)])
         #expect(FileManager.default.fileExists(atPath: marker.path(percentEncoded: false)))
     }
 }
