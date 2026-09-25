@@ -30,7 +30,7 @@ Preserve the CLI's documented [JSON contract](docs/json.md). Validate private-mo
 
 Open an [issue](https://github.com/omar-hanafy/Resolute/issues) with the steps to reproduce, expected and actual behavior, Resolute version or commit, macOS version, Mac model, and display/cable/adapter setup. Include `resolute doctor`; for mode problems, include `resolute modes -d <display> --all --raw` and say whether the display recovered.
 
-Review diagnostics before posting. `resolute doctor` omits display serial numbers, but reports hardware details and override paths; other commands, fixtures and logs may contain identifiers or personal paths. Include only the relevant, redacted output. Do not post credentials or sensitive security exploit details in a public issue.
+Review diagnostics before posting. `resolute doctor` omits display serial numbers, but reports hardware details and override paths; other commands, fixtures and logs may contain identifiers or personal paths. Include only the relevant, redacted output. Do not post credentials or sensitive security exploit details in a public issue. Use the private reporting channel in [SECURITY.md](SECURITY.md) for vulnerabilities.
 
 ## License
 

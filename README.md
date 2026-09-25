@@ -4,7 +4,7 @@ Choose the resolutions and refresh rates your Mac exposes from the menu bar, inc
 
 Resolute is a Swift menu-bar app and command-line tool inspired by [RDM](https://github.com/avibrazil/RDM), with mode validation, refresh-rate selection and recoverable hidden-mode trials.
 
-**Status: Apple silicon beta / 0.3.0 release candidate.** Built-in and one external display have live-test coverage. Downloadable Developer ID signing and notarization, sleep/wake, reboot, and the complete privileged override workflow still need validation. Start with a source build; see the [validation record and remaining release gates](docs/production-readiness.md).
+**Status: public Apple silicon beta — 0.3.0.** Built-in and one external display have live-test coverage. Downloadable Developer ID signing and notarization, sleep/wake, reboot, and the complete privileged override workflow still need validation. Start with a source build; see the [validation record and remaining release gates](docs/production-readiness.md).
 
 ## What it does
 
@@ -20,6 +20,12 @@ Resolute is a Swift menu-bar app and command-line tool inspired by [RDM](https:/
 
 - macOS 14 Sonoma or later. **Apple silicon is the primary target** for development, default builds and CI. Intel compilation remains optional compatibility work, with no Intel hardware validation in the current review.
 - To build: Xcode 16 or later (the package needs Swift 6.0). Builds, tests and app packaging passed on Xcode 16.0, 26.6 and 27.0 in [hosted CI](https://github.com/omar-hanafy/Resolute/actions/runs/36164896941).
+
+## Download
+
+[Download Resolute 0.3.0 beta](https://github.com/omar-hanafy/Resolute/releases/tag/v0.3.0): choose the DMG or ZIP for Apple silicon. The release includes `SHA256SUMS` to verify the archives. Open the DMG and drag Resolute to Applications, or extract the ZIP and move the app there.
+
+**The beta is ad hoc signed, not Developer ID signed or notarized.** macOS may block opening a downloaded copy; normal Gatekeeper acceptance has not been validated. Source builds are an alternative. Read the release notes and [remaining validation limits](docs/production-readiness.md) before changing display settings.
 
 ## Build and install from source
 

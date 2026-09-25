@@ -78,3 +78,9 @@ The Linux lint job also passed. Live display switching remains opt-in and was no
 Hosted preflight caught older-SDK/compiler incompatibilities, a failed app-version lookup being mistaken for a version, and test assumptions about process startup speed. These are fixed. Subprocess progress and shutdown tests now use startup handshakes and release gates, while lock-contention tests keep the lock held until the operation returns. A deliberately blocking subprocess-runner mutation failed the progress test in an isolated copy; the working implementation passed.
 
 The final local automated run reported **456 tests with eight explicit skips and no failures**. This documentation update records the passed revision; it changes no application, library, CLI, script or test source. The refreshed draft release identifies its exact packaging commit and retains the signing/notarization and hardware limitations above. Repository visibility remains a separate publishing action.
+
+## Public beta publication — 2026-09-25
+
+The repository is public and [0.3.0 is published as a prerelease](https://github.com/omar-hanafy/Resolute/releases/tag/v0.3.0). Its ZIP, DMG and checksums remain the reviewed build 151 from `150fdce`; this publication documentation does not change the binaries. The beta remains ad hoc signed and not notarized, with the hardware and privilege-integration limits above unchanged.
+
+GitHub private vulnerability reporting is enabled. See [SECURITY.md](../SECURITY.md) for the verified reporting channel. Public pushes and pull requests now trigger the configured CI automatically.
