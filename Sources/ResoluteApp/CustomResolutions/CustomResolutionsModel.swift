@@ -106,6 +106,9 @@ final class CustomResolutionsModel {
         var contents: (override: DisplayOverride, data: Data)?
         /// Why the backup can't be read; it is listed, but cannot be chosen.
         var failure: String?
+        /// What the installed file held for the editor when the list was read: the file
+        /// the person chose to replace, which the restore checks is still there.
+        var replacing: OverrideFileState?
 
         var id: URL { backup.id }
         var canRestore: Bool { contents != nil }
@@ -131,6 +134,7 @@ final class CustomResolutionsModel {
 
         static func == (lhs: BackupChoice, rhs: BackupChoice) -> Bool {
             lhs.backup == rhs.backup && lhs.contents?.data == rhs.contents?.data && lhs.failure == rhs.failure
+                && lhs.replacing == rhs.replacing
         }
     }
 
@@ -502,20 +506,24 @@ final class CustomResolutionsModel {
     func backupChoices() -> [BackupChoice] {
         guard let selection else { return [] }
         return store.backups(for: selection).map { backup in
+            var choice = BackupChoice(backup: backup, replacing: installedState)
             do {
-                return BackupChoice(backup: backup, contents: try store.contents(of: backup))
+                choice.contents = try store.contents(of: backup)
             } catch ResoluteError.overrideUnreadable(_, let reason) {
-                return BackupChoice(backup: backup, failure: reason)
+                choice.failure = reason
             } catch {
-                return BackupChoice(backup: backup, failure: error.localizedDescription)
+                choice.failure = error.localizedDescription
             }
+            return choice
         }
     }
 
     /// Writes `choice`'s backup back as it is; the installer backs up the file it replaces.
+    /// It asks first when the file is no longer the one the list was read for, even if the
+    /// editor has read the new one since, as it does without a word when the list closes.
     func restore(_ choice: BackupChoice) async {
         guard let key = selection, choice.backup.key == key, choice.canRestore, canRestoreBackup else { return }
-        await attempt(.restore(choice), on: key)
+        await attempt(.restore(choice), on: key, expecting: choice.replacing)
     }
 
     // MARK: - Changes on disk
@@ -541,11 +549,16 @@ final class CustomResolutionsModel {
         conflict = nil
     }
 
-    /// Runs `change` when the installed file still holds what it held when it was read;
-    /// otherwise sets `conflict`, before anything asks for a password.
+    /// Runs `change` when the installed file still holds `expected`, by default what it held
+    /// when the override on screen was read; otherwise sets `conflict`, before anything
+    /// asks for a password.
     private func attempt(_ change: Conflict.Change, on key: OverrideKey) async {
+        await attempt(change, on: key, expecting: installedState)
+    }
+
+    private func attempt(_ change: Conflict.Change, on key: OverrideKey, expecting expected: OverrideFileState?) async {
         // Unknown when the file could not be read; the script then checks nothing either.
-        if let expected = installedState {
+        if let expected {
             let current: OverrideFileState
             do {
                 current = try store.installedState(for: key)
@@ -558,7 +571,7 @@ final class CustomResolutionsModel {
                 return
             }
         }
-        await run(change, on: key, expecting: installedState)
+        await run(change, on: key, expecting: expected)
     }
 
     /// Runs `change` through the installer, whose script checks again that the file holds

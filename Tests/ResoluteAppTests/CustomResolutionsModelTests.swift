@@ -932,6 +932,27 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         #expect(model.notice?.title == "Backup restored")
     }
 
+    /// Closing the list makes the window key, which reads a changed file again without a
+    /// word; the restore still asks, because the file is not the one the list was opened on.
+    @Test func asksBeforeRestoringWhenTheFileChangedWhileChoosing() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: key, resolutions: [qhd]), at: "141320", under: root)
+        let runner = CountingRunner()
+        let model = makeModel(root: root, displays: StubDisplays([first, second]), runner: runner)
+        let choice = try #require(model.backupChoices().first)
+        try install(theirs, under: root)
+        model.refresh()
+        #expect(model.rows.map(\.entry) == theirs.resolutions)
+
+        await model.restore(choice)
+        #expect(runner.runs == 0)
+        #expect(model.conflict?.change == .restore(choice))
+        #expect(try installed(key, under: root) == theirs.readBack())
+    }
+
     /// After Remove Override… the file is gone but its backup is not.
     @Test func restoresAfterTheOverrideWasRemoved() async throws {
         let root = try temporaryRoot()
