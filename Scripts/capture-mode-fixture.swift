@@ -1,25 +1,59 @@
 #!/usr/bin/env swift
-// Captures the main display's public modes and raw private SkyLight mode records as
-// JSON, for Resolute's decoder tests. Read-only: it never changes a display.
+// Captures a display's public modes and raw private SkyLight mode records as JSON, for
+// Resolute's decoder tests. Read-only: it never changes a display.
 //
-//   swift Scripts/capture-mode-fixture.swift > Tests/ResoluteKitTests/Fixtures/<name>.json
+//   swift Scripts/capture-mode-fixture.swift --list          # online displays and their IDs
+//   swift Scripts/capture-mode-fixture.swift [display-id] > Tests/ResoluteKitTests/Fixtures/<name>.json
+//
+// Without a display ID it captures the main display. See docs/new-macos-release.md.
 import CoreGraphics
 import Foundation
 
 typealias ModeCount = @convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Int32>) -> Void
 typealias ModeDescription = @convention(c) (CGDirectDisplayID, Int32, UnsafeMutableRawPointer, Int32) -> Void
 
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+    exit(1)
+}
+
+func onlineDisplays() -> [CGDirectDisplayID] {
+    var count: UInt32 = 0
+    guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+    var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+    guard CGGetOnlineDisplayList(count, &ids, &count) == .success else { return [] }
+    return Array(ids.prefix(Int(count)))
+}
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+if arguments == ["--list"] {
+    for id in onlineDisplays() {
+        let traits = [
+            "vendor " + String(CGDisplayVendorNumber(id), radix: 16), "product " + String(CGDisplayModelNumber(id), radix: 16),
+            CGDisplayIsMain(id) != 0 ? "main" : nil, CGDisplayIsBuiltin(id) != 0 ? "built-in" : nil,
+        ].compactMap { $0 }
+        print("\(id)  (\(traits.joined(separator: ", ")))")
+    }
+    exit(0)
+}
+guard arguments.count <= 1 else { fail("usage: capture-mode-fixture.swift [--list | display-id]") }
+let display: CGDirectDisplayID
+if let text = arguments.first {
+    guard let id = CGDirectDisplayID(text), onlineDisplays().contains(id) else {
+        fail("“\(text)” is not an online display's ID. Run with --list to see them.")
+    }
+    display = id
+} else {
+    display = CGMainDisplayID()
+}
+
 let everyImage = UnsafeMutableRawPointer(bitPattern: -2)  // RTLD_DEFAULT
 guard let countSymbol = dlsym(everyImage, "CGSGetNumberOfDisplayModes"),
       let descriptionSymbol = dlsym(everyImage, "CGSGetDisplayModeDescriptionOfLength")
-else {
-    FileHandle.standardError.write(Data("The SkyLight mode functions are unavailable.\n".utf8))
-    exit(1)
-}
+else { fail("The SkyLight mode functions are unavailable.") }
 let modeCount = unsafeBitCast(countSymbol, to: ModeCount.self)
 let modeDescription = unsafeBitCast(descriptionSymbol, to: ModeDescription.self)
 
-let display = CGMainDisplayID()
 let options = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
 let modes = (CGDisplayCopyAllDisplayModes(display, options) as? [CGDisplayMode]) ?? []
 
@@ -41,6 +75,9 @@ let model = modelBytes.withUnsafeBufferPointer { String(cString: $0.baseAddress!
 let fixture: [String: Any] = [
     "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
     "model": model,
+    "vendorID": String(CGDisplayVendorNumber(display), radix: 16),
+    "productID": String(CGDisplayModelNumber(display), radix: 16),
+    "isBuiltin": CGDisplayIsBuiltin(display) != 0,
     "currentModeID": CGDisplayCopyDisplayMode(display)?.ioDisplayModeID ?? -1,
     "systemModes": modes.sorted { $0.ioDisplayModeID < $1.ioDisplayModeID }.map { mode -> [String: Any] in
         [

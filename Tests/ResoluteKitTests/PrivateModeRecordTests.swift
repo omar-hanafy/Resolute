@@ -136,3 +136,22 @@ import Testing
             == .untrusted(reason: "no SkyLight record matches a CoreGraphics mode"))
     }
 }
+
+/// Every captured display, from any Mac and macOS release, must decode to records that
+/// agree with CoreGraphics; otherwise Resolute would hide that display's hidden modes.
+/// `swift Scripts/capture-mode-fixture.swift` adds captures (see docs/new-macos-release.md).
+@Suite struct CapturedFixtureTests {
+    @Test func trustsTheRecordsOfEveryCapturedDisplay() throws {
+        let fixtures = try CapturedDisplay.all()
+        #expect(!fixtures.isEmpty)
+        for (name, capture) in fixtures {
+            let records = capture.records.map(PrivateModeRecord.init(bytes:))
+            guard case .trusted(_, let hidden) = PrivateModeValidator.validate(records: records, against: capture.modes) else {
+                Issue.record("\(name): the records do not agree with CoreGraphics")
+                continue
+            }
+            #expect(hidden.allSatisfy { $0.width > 0 && $0.pixelWidth >= $0.width }, "\(name)")
+            #expect(capture.modes.contains { $0.modeID == capture.currentModeID }, "\(name)")
+        }
+    }
+}

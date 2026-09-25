@@ -31,6 +31,14 @@ struct CapturedDisplay: Decodable {
         return try JSONDecoder().decode(CapturedDisplay.self, from: Data(contentsOf: url))
     }
 
+    /// Every capture in Fixtures, by file name: other Macs, displays and macOS releases.
+    static func all() throws -> [(name: String, capture: CapturedDisplay)] {
+        let urls = Bundle.module.urls(forResourcesWithExtension: "json", subdirectory: "Fixtures") ?? []
+        return try urls.sorted { $0.lastPathComponent < $1.lastPathComponent }.map { url in
+            (url.lastPathComponent, try JSONDecoder().decode(CapturedDisplay.self, from: Data(contentsOf: url)))
+        }
+    }
+
     var records: [[UInt8]] { privateRecords.map(TestData.bytes(hex:)) }
 
     var modes: [DisplayMode] {
