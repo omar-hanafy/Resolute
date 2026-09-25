@@ -1,14 +1,16 @@
 # Resolute
 
-Pick any resolution and refresh rate for your Mac's displays from the menu bar, including the modes System Settings hides.
+Choose the resolutions and refresh rates your Mac exposes from the menu bar, including validated modes System Settings hides.
 
-Resolute is a ground-up successor to [RDM](https://github.com/avibrazil/RDM). On current macOS, RDM misreads refresh rates (it shows 0 Hz and switches to 47.95 Hz when you pick a resolution) and cannot name displays on Apple silicon.
+Resolute is a Swift menu-bar app and command-line tool inspired by [RDM](https://github.com/avibrazil/RDM), with mode validation, refresh-rate selection and recoverable hidden-mode trials.
+
+**Status: Apple silicon beta / 0.3.0 release candidate.** Built-in and one external display have live-test coverage. Downloadable Developer ID signing and notarization, sleep/wake, reboot, and the complete privileged override workflow still need validation. Start with a source build; see the [validation record and remaining release gates](docs/production-readiness.md).
 
 ## What it does
 
-- **Every mode in one menu.** HiDPI ("looks like") resolutions, low-resolution 1× modes such as your panel's full native resolution, and, while you hold ⌥, modes macOS lists nowhere.
+- **Validated modes in one menu.** HiDPI ("looks like") resolutions, low-resolution 1× modes such as your panel's full native resolution, and, while you hold ⌥, additional modes hidden from System Settings.
 - **Refresh rates.** Switch between 120, 60, 59.94, 50, 48 and 47.95 Hz, or whatever your display offers, without changing the resolution.
-- **Safe hidden modes.** A hidden mode is tried for the current session and reverts after 15 seconds unless you choose Keep (in the menu) or type `y` (in the terminal, where Ctrl-C reverts too), so a mode your display cannot show undoes itself.
+- **Recoverable hidden-mode trials.** A hidden mode is tried for the current session and reverts after 15 seconds unless you choose Keep or type `y` in an interactive terminal. Ctrl-C, terminal hangup and termination requests trigger recovery too. If the display disconnects or refuses recovery, Resolute retries and explains the remaining recovery path. Force Quit, a crash or a powered-off display can prevent automatic recovery; logging out ends a session trial.
 - **Mirroring** on or off with one click.
 - **Custom HiDPI resolutions** through display override files, like RDM's editor, with backups you can restore.
 - **A command-line tool,** `resolute`, for scripts and shortcuts, with [JSON output](docs/json.md) and a `resolute doctor` report for bug reports.
@@ -16,10 +18,12 @@ Resolute is a ground-up successor to [RDM](https://github.com/avibrazil/RDM). On
 
 ## Requirements
 
-- macOS 14 Sonoma or later. Developed and tested on macOS 27 on Apple silicon. The app is also built for Intel Macs, which stop at macOS 26; that build only gets a quick check under Rosetta.
+- macOS 14 Sonoma or later. **Apple silicon is the primary target** for development, default builds and CI. Intel compilation remains optional compatibility work, with no Intel hardware validation in the current review.
 - To build: Xcode 16 or later (the package needs Swift 6.0). Only Xcode 27 (Swift 6.4) has been tested so far.
 
-## Install
+## Build and install from source
+
+Install Xcode and select its command-line tools before building. `swift --version` should report Swift 6.0 or later.
 
 ```sh
 git clone https://github.com/omar-hanafy/Resolute.git
@@ -27,19 +31,21 @@ cd Resolute
 make install
 ```
 
-`make install` builds `dist/Resolute.app` (universal, signed ad hoc), copies it to `/Applications`, links the `resolute` command into `/usr/local/bin` when that folder is writable, and opens the app. `make app` only builds; the results are in `dist/`.
+`make install` builds `dist/Resolute.app` (Apple silicon, signed ad hoc), stages the complete copy before replacing the installed app in `/Applications`, links the `resolute` command into `/usr/local/bin` when that folder is writable, and opens the app. An unrelated command or link is preserved. `make app` only builds; the results are in `dist/`. `UNIVERSAL=1 make app` optionally includes Intel.
 
-`make release` builds the universal app and packages `dist/Resolute-<version>.zip`, `dist/Resolute-<version>.dmg` and `dist/SHA256SUMS`. `SIGN_IDENTITY` sets the codesigning identity for `make app` and `make release` (default `-`, ad hoc; a real identity also turns on the hardened runtime). `NOTARY_PROFILE` names a keychain profile created with `xcrun notarytool store-credentials`; with it set, `make release` notarizes and staples the zip and dmg, which needs a Developer ID Application `SIGN_IDENTITY`. Without `NOTARY_PROFILE` the build is signed but not notarized, so macOS blocks a downloaded copy until you allow it in System Settings › Privacy & Security (Open Anyway).
+The source build uses an **ad hoc signature for local use**. It is not Developer ID signed or notarized. If `/Applications` is not writable, build with `make app` and run `open dist/Resolute.app`; the CLI is available as `dist/resolute`. A per-user installation is also possible with `RESOLUTE_APP_DIR="$HOME/Applications" RESOLUTE_BIN_DIR="$HOME/.local/bin" make install` (create the CLI directory and add it to `PATH` first). Use the same directory settings when uninstalling.
+
+Maintainers can run `make release` to produce ZIP/DMG archives, `SHA256SUMS` and release notes in `dist/`; this does not publish a GitHub release. `SIGN_IDENTITY` selects a signing identity (default `-`, ad hoc). A Developer ID Application identity plus `NOTARY_PROFILE` enables submission to Apple, stapling the app, rebuilding the ZIP, and notarizing/stapling the DMG. That distribution path has not yet been validated; local packaging success does not establish Gatekeeper acceptance.
 
 If you used RDM, quit it and remove it from System Settings › General › Login Items. Resolute reads the override files RDM wrote.
 
-To uninstall, run `make uninstall`. It quits the app, turns off Launch at Login, then removes the app and the command-line link. (An app older than 0.2 can't turn Launch at Login off for it, so the script says where to do that.)
+To uninstall, run `make uninstall`. It quits the app, turns off Launch at Login, then removes the app, its preferences and its command-line link. Custom display overrides and their backups remain; restore or remove overrides before uninstalling if you want to undo them. (An app older than 0.2 can't turn Launch at Login off for it, so the script says where to do that.)
 
 ## The menu
 
 Click the display icon in the menu bar. Each display shows its current resolution and refresh rate; both open a submenu.
 
-- **HiDPI** resolutions look sharp: macOS draws them at twice the size and scales the result to your panel.
+- **HiDPI** resolutions use a larger render buffer for readable text. The menu shows logical workspace size; its pixel dimensions describe the render buffer, not the panel or cable signal. Downsampling to a lower-resolution panel can still soften fine detail.
 - **Low Resolution (1×)** modes draw one pixel per point. On a Retina display this is how you get the panel's full native resolution (3456 × 2234 on a 16-inch MacBook Pro), at the cost of very small text. Turn the section off with **Show Low-Resolution Modes**.
 - **Default** marks macOS's default mode and **Native** the panel's native size.
 - Hold **⌥** while opening the menu to see hidden modes, mode IDs and pixel sizes. macOS may keep a hidden mode only until you log out, even after you choose Keep.
@@ -73,13 +79,14 @@ Resolute logs each mode switch and each change to an override file. `log show --
 
 macOS reads per-display override files from `/Library/Displays/Contents/Resources/Overrides`. The **Custom Resolutions…** window, and `resolute overrides`, edit the `scale-resolutions` list in those files, so you can add modes a display does not offer, such as 2560 × 1080 HiDPI on a 5120 × 2160 monitor.
 
-<img src="docs/images/custom-resolutions.png" width="860" alt="The Custom Resolutions window: the connected built-in display and an installed override for a 5120 × 2160 monitor, listing 5120 × 2160 1× and 2560 × 1080 HiDPI, with Add Resolution, Remove Override… and Show in Finder">
+<img src="docs/images/custom-resolutions.png" width="860" alt="The Custom Resolutions window: the connected built-in display and an example installed override listing 5120 × 2160 1× and 2560 × 1080 HiDPI, with Add Resolution, Remove Override… and Show in Finder">
 
 - The list shows every entry in the file, in the file's order. Adding a HiDPI resolution also adds a 1× entry at its rendered size, as RDM did, unless the list has one; removing the HiDPI entry removes that 1× entry only if it was added with it in the same edit. Removing a 1× entry that a HiDPI entry renders at gets a note, with a way to put it back.
 - Saving asks for an administrator password. The file being replaced is first copied to `/Library/Application Support/Resolute/Backups`. **Restore Backup…** (or `sudo resolute overrides restore`) puts one back, and `sudo resolute overrides prune` deletes old ones.
 - If the file changed after you opened it, for example through `resolute overrides`, Resolute reads it again or, when you have unsaved changes, asks before saving over it.
 - New modes appear after you reconnect the display or restart the Mac.
-- On Apple silicon Macs, macOS may ignore custom scaled resolutions for some displays.
+- Overrides add logical sizes; they do not add cable bandwidth, new panel pixels or refresh timings. Confirm refresh again after choosing a size. On Apple silicon Macs, macOS may ignore custom scaled resolutions for some displays.
+- Privileged writes refuse linked files, special files, redirected directories and paths writable by other users. An override affects every monitor sharing its vendor/product IDs.
 - **Remove Override…** (or `sudo resolute overrides reset -d <display>`) deletes the file and returns the display to its defaults.
 
 ```sh
@@ -92,6 +99,14 @@ resolute overrides backups -d DELL                      # newest first
 sudo resolute overrides restore 1 -d DELL               # puts the newest back
 sudo resolute overrides prune --keep 5 --all            # deletes older backups
 ```
+
+## Recovery and limitations
+
+For a hidden-mode trial, wait for the 15-second countdown to restore the previous mode if the picture is unusable. Keep the app or terminal running while it attempts recovery. If the display disconnects, reconnect it. If automatic restoration fails, use a working screen to inspect `resolute displays` and `resolute modes -d <display>`, then select a known usable mode or `resolute set --default -d <display>`. Display and mode IDs can change on reconnect; read them again instead of reusing old IDs. Logging out ends a session-scoped trial.
+
+For a custom override, use **Restore Backup…** to return to a previous file, or **Remove Override…** to remove the installed override, then reconnect the display or restart. These changes require administrator authorization and apply to every monitor sharing the same vendor/product IDs. Uninstalling the app does not undo an override.
+
+Automatic recovery depends on the process remaining alive and macOS accepting the restore. It cannot guarantee recovery after Force Quit, a crash, power/input changes or a disconnected display. Private macOS APIs and override behavior can change between OS versions. Resolute does not control DDC brightness/input/power, create virtual displays, or configure HDR/chroma. Render-buffer dimensions do not prove physical output timing or cable bandwidth.
 
 ## How it works
 
@@ -111,9 +126,9 @@ make release     # dist/Resolute-<version>.zip, .dmg and SHA256SUMS
 make icon        # regenerates Resources/AppIcon.icns
 ```
 
-[TESTING.md](TESTING.md) lists the checks that need a person and a screen. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers changes and bug reports. [TESTING.md](TESTING.md) lists the checks that need a person and a screen. [The production review](docs/production-readiness.md) records the current evidence and remaining release gates. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
 
-CI (`.github/workflows/ci.yml`) lints and runs the tests on every push to `main` and every pull request, but only while the repo is public; while it's private, a run only happens when a maintainer starts one by hand.
+CI (`.github/workflows/ci.yml`) checks Apple silicon on macOS 15/Xcode 16, macOS 26/Xcode 26, and the hosted Xcode 27 preview, lints and runs the tests on every push to `main` and every pull request, but only while the repo is public; while it's private, a run only happens when a maintainer starts one by hand.
 
 `Resolute.app/Contents/MacOS/Resolute --dump-menu` prints the menu as it would appear, and `--render-editor file.png` captures the Custom Resolutions window without showing it (the terminal needs the Screen Recording permission); `docs/images/custom-resolutions.png` is one such capture.
 

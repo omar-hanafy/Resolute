@@ -92,6 +92,11 @@ import Testing
             try SystemDisplayService(skyLight: nil).apply(modeID: 1, to: offline, scope: .app)
         }
     }
+
+    @Test func reportsNoCurrentModeForAnOfflineDisplay() throws {
+        try #require(!SystemDisplayService.onlineDisplayIDs().contains(offline))
+        #expect(SystemDisplayService(skyLight: nil).currentModeID(of: offline) == nil)
+    }
 }
 
 @Suite struct ConfigurationScopeTests {

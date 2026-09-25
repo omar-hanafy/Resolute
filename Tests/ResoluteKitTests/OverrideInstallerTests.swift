@@ -183,28 +183,10 @@ import Testing
         }
     }
 
-    @Test func buildsTheScriptItDescribes() {
-        let script = OverrideInstaller.installScript(
-            contents: Data("hi".utf8),
-            destination: URL(filePath: "/L/DisplayVendorID-1/DisplayProductID-2"),
-            backupStem: URL(filePath: "/B/DisplayVendorID-1/DisplayProductID-2-x")
-        )
-        #expect(script == "set -e; umask 022; "
-            + "if [ -f '/L/DisplayVendorID-1/DisplayProductID-2' ]; then mkdir -p '/B/DisplayVendorID-1/'; "
-            + "n=1; backup='/B/DisplayVendorID-1/DisplayProductID-2-x'.plist; "
-            + "until (set -C; : > \"$backup\") 2>/dev/null; do "
-            + "[ -e \"$backup\" ] || { echo 'Could not create a backup in /B/DisplayVendorID-1/' >&2; exit 1; }; "
-            + "n=$((n + 1)); backup='/B/DisplayVendorID-1/DisplayProductID-2-x'-$n.plist; done; "
-            + "cp -p '/L/DisplayVendorID-1/DisplayProductID-2' \"$backup\" "
-            + "|| { rm -f \"$backup\"; echo 'Could not back up the file being replaced.' >&2; exit 1; }; fi; "
-            + "mkdir -p '/L/DisplayVendorID-1/'; "
-            + "incoming=$(mktemp '/L/DisplayVendorID-1/.resolute.XXXXXX'); "
-            + "trap 'rm -f \"$incoming\"' EXIT; "
-            + "printf '%s' 'aGk=' | /usr/bin/base64 -D > \"$incoming\"; "
-            + "chmod 644 \"$incoming\"; "
-            + "mv -f \"$incoming\" '/L/DisplayVendorID-1/DisplayProductID-2'")
+    @Test func formatsBackupTimestampsInUTC() {
         #expect(OverrideInstaller.timestamp(fixedDate) == "20260921-141320")
     }
+
 }
 
 /// Records the order things happen in.

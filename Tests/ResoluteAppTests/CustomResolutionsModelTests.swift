@@ -162,6 +162,19 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         #expect(!model.hasChanges)
     }
 
+    @Test func discardDialogUsesItsCapturedTargetAfterPresentationIsCleared() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        _ = model.add(hd)
+        model.requestSelection(OverrideKey(display: second))
+        let target = try #require(model.pendingSelection)
+        model.cancelPendingSelection()
+        model.discardChangesAndSelect(target)
+        #expect(model.selection == OverrideKey(display: second))
+        #expect(!model.hasChanges)
+    }
+
     @Test func menuRequestsAskToo() throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -185,6 +198,52 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         #expect(model.targets.contains { $0.key == OverrideKey(display: first) && !$0.isConnected })
     }
 
+    @Test func retainsTheOperationTargetWhenItsFileAndDisplayDisappearDuringAuthorization() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = Gate()
+        let displays = StubDisplays([first, second])
+        let key = OverrideKey(display: first)
+        try install(DisplayOverride(key: key, resolutions: [hd]), under: root)
+        let model = makeModel(root: root, displays: displays, runner: GatedRunner(gate: gate))
+        let removal = Task { await model.removeOverride() }
+        while !model.isWorking { await Task.yield() }
+
+        try FileManager.default.removeItem(at: OverrideLocations.staged(at: root).userFile(for: key))
+        displays.set([second])
+        model.reloadTargets()
+        model.select(OverrideKey(display: second))
+        #expect(model.selection == key)
+        #expect(model.rows.map(\.entry) == [hd])
+
+        await gate.open()
+        await removal.value
+        #expect(!model.isWorking)
+        #expect(model.selection == key)
+        #expect(model.conflict?.key == key)
+        #expect(model.conflict?.current == .absent)
+        #expect(model.selectedTarget?.isConnected == false)
+        model.reloadFromDisk()
+        #expect(model.selection == OverrideKey(display: second))
+    }
+
+    @Test func addSheetCannotEditADifferentDisplayAfterDisconnect() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let displays = StubDisplays([first, second])
+        let model = makeModel(root: root, displays: displays)
+        let sheetTarget = model.selection
+        displays.set([second])
+        model.reloadTargets()
+        #expect(model.selection == OverrideKey(display: second))
+        #expect(model.add(hd, to: sheetTarget) != nil)
+        #expect(model.rows.isEmpty)
+        #expect(!model.hasChanges)
+        displays.set([])
+        model.reloadTargets()
+        #expect(model.add(hd) != nil)
+    }
+
     @Test func holdsStillWhileSaving() async throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -199,6 +258,7 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         model.productName = "Renamed"
         model.revert()
         model.requestSelection(OverrideKey(display: second))
+        model.select(OverrideKey(display: second))
         #expect(model.selection == OverrideKey(display: first))
         #expect(model.draft?.working == written)
 
@@ -341,9 +401,8 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         #expect(try installed(OverrideKey(display: first), under: root) == theirs.readBack())
     }
 
-    /// A link to a file that is gone is no override, so saving over it asks nothing: it
-    /// used to ask "changed" again after every Save Anyway, each time after the password.
-    @Test func savesOverALinkToAFileThatIsGone() async throws {
+    /// A dangling link must not be followed or replaced by a privileged save.
+    @Test func refusesALinkToAFileThatIsGoneWithoutLosingEdits() async throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let key = OverrideKey(display: first)
@@ -356,8 +415,11 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
 
         await model.save()
         #expect(model.conflict == nil)
-        #expect(!model.hasChanges)
-        #expect(try installed(key, under: root)?.resolutions == [.standard(width: 1920, height: 1200)])
+        #expect(model.hasChanges)
+        #expect(model.notice?.title == "The override could not be saved")
+        #expect(model.notice?.detail.localizedCaseInsensitiveContains("unsafe override path") == true)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: url.path) == root.appending(path: "gone.plist").path)
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "gone.plist").path))
     }
 
     @Test func saveAnywayReplacesTheNewVersionAndBacksItUp() async throws {

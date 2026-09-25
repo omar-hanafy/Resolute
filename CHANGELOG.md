@@ -1,57 +1,43 @@
 # Changelog
 
-## Unreleased
-
-### Changed
-
-- Remove Override… says when it also discards unsaved changes.
-
-### Fixed
-
-- Ctrl-C at `resolute set`'s Keep prompt ended the command and left the hidden mode in place until you logged out, which is worst when the mode shows nothing. Ctrl-C now counts as no and reverts. While `set` waits for a display that went away, Ctrl-C stops the wait after one last try and prints the command that puts the previous mode back.
-- When a hidden mode never showed and its display went away and came back, `resolute set` reported the error before saying how the display came back.
-- A backup of an override Resolute can't edit, such as a file that lists several overrides, could not be restored, although a restore writes the file back as it is. `resolute overrides restore` and Restore Backup… now put it back, and the lists say its entries can't be shown.
-- An alert opened over the Keep/Revert countdown was closed by the countdown's timer in place of the countdown, which then stayed on screen without reverting. The countdown now waits for that alert to close, then reverts.
-
 ## 0.3.0 — 2026-09-25
 
 ### Added
 
-- Backups: `resolute overrides backups` lists a display's backups with their local dates, `restore` puts one back byte for byte (backing up the file it replaces) and `prune` deletes all but the newest. In the app, **Restore Backup…** in the editor does the same, showing what each backup holds.
-- The editor notices when its override changed on disk, through another app or the `resolute` command. It reads the file again when you come back to it, keeps unsaved changes under a banner, and asks before saving over the new version.
-- A note when an edit leaves a HiDPI entry without the 1× entry at its pixel size, which Resolute and RDM add with each HiDPI entry. The editor offers **Add 1× Entry**; `resolute overrides remove` prints the command that puts it back.
-- `resolute doctor`: a read-only report for bug reports, with versions, displays, modes, overrides and backups, also as JSON. It leaves out serial numbers.
-- Logging: each mode switch and each change to an override file, or why it failed. `log show --predicate 'subsystem == "com.omarhanafy.Resolute"' --info --last 1h` shows the last hour.
-- VoiceOver: an editor row reads as one line, such as "1280 by 800, HiDPI, rendered at 2560 by 1600", the display list says which displays are connected and have an override, and the menu names hidden modes.
-- `docs/json.md` documents every key of the JSON output, and `docs/new-macos-release.md` what to check on each new macOS release.
+- Override backups: `resolute overrides backups`, `restore` and `prune` list, restore and remove old backups. **Restore Backup…** in the editor previews and restores them, backing up the file it replaces.
+- The editor reloads external override changes, preserves unsaved edits under a banner, and asks before overwriting a newer file.
+- Missing 1× partner entries get an **Add 1× Entry** action in the editor and a recovery command from `resolute overrides remove`.
+- `resolute doctor` reports versions, displays, modes, overrides and backups, including JSON output, without display serial numbers.
+- Unified logging records mode switches and override changes or failures. Read it with `log show --predicate 'subsystem == "com.omarhanafy.Resolute"' --info --last 1h`.
+- VoiceOver labels describe editor rows, connected displays, installed overrides and hidden modes.
+- JSON output is documented in `docs/json.md`; `docs/new-macos-release.md` covers validation on new macOS versions.
 
 ### Fixed
 
-- A display can drop off while it tries a hidden mode it cannot show. Resolute then reported a failed revert, and the display could come back in that mode. Now the revert waits for the display and puts the previous mode back when it returns: up to two minutes in the app, which shows nothing meanwhile and tries a refused mode again every second, and 30 seconds in `resolute set`. A display that comes back in another mode is left alone, as is one you have picked a new mode for.
-- Keep saved the mode on trial even when, by the time you answered, the display had come back in another mode or been switched elsewhere, which switched it back to a mode that may have made it drop off. Keep and Revert now go by what the display shows when you answer: a display showing another mode keeps it.
-- After a revert that failed, Resolute suggested `resolute set --default`, which saves the default mode over the one you had. It now says that logging out brings back the mode macOS saved, and `resolute set` prints the command that puts the previous mode back.
-- Resolute could ask the private SkyLight functions about a display that had just gone away. Each call now checks first that the display is still online.
-- The command line read screen names from AppKit off the main thread.
-- Next to a display really named "Studio (1)", two displays named "Studio" could both be called "Studio (1)".
-- Saving a copy of Apple's override re-sorted its entries. 167 of the 251 files macOS 27 ships that list resolutions use an order of their own; Resolute now keeps each file's order.
-- The app and `sudo resolute overrides …` could both edit an override at the same time, and a save in one silently replaced a change made in the other. Every change now checks that the file is still what it was based on, and the app takes the command line's lock.
-- Under a strict umask, the first `sudo resolute overrides …` made `/Library/Application Support/Resolute` readable only by root, which hid the backups from the app. It is now made readable by everyone. A folder made that way keeps its permissions; `sudo chmod 755 "/Library/Application Support/Resolute"` fixes it.
-- `@0x3c`, `--refresh 6e1` and other non-decimal numbers were read as rates and scales (0x3c is 60).
-- `resolute set 2992x1934@2x` did not suggest 1496 × 967 HiDPI, the mode that renders at that size.
-- On a case-sensitive volume, an override folder named in uppercase, which macOS does not read, was listed.
-- An override entry with a size a file cannot hold crashed instead of reporting an error.
-- A failed privileged script reported osascript's wrapper ("0:204: execution error: … (1)") instead of its own message.
+- Hidden-mode trials require an interactive terminal before switching. Partial input cannot suspend the 15-second deadline; only `y` or `yes` keeps the mode. Ctrl-C, terminal closure and termination requests trigger recovery.
+- Keep rejects expired trials and disconnected displays. Keep and Revert preserve a mode chosen elsewhere during the trial, and private rollback verifies the mode actually applied.
+- Failed restores retry for up to two minutes in the app or 30 seconds in the CLI. Recovery validates display identity and mode properties after reconnect so reused IDs cannot target a different monitor or mode.
+- The CLI reports the recovered display state before a failed-trial error. Interrupted or unsuccessful recovery gives instructions to inspect current IDs and restore the previous mode without saving a new default.
+- Quit and other menu actions cannot interrupt a trial or override write. Pending recovery requires an explicit choice before quitting; countdown timers and Escape affect only their own confirmation panel.
+- Editor dialogs and pending saves keep their intended display through disconnects, selection changes and external file changes.
+- Privileged writes reject redirected or writable paths, linked and special files, and malformed backups. Restore and prune validate backup identity; app and CLI writes share locking and detect conflicting edits.
+- Valid backup files the editor cannot interpret, including files containing multiple overrides, can still be restored byte for byte; backup lists explain when entries cannot be previewed.
+- Override edits preserve the original resolution-entry order. Unrepresentable entry sizes report an error instead of crashing, and uppercase override directory names macOS ignores are no longer listed on case-sensitive volumes.
+- Newly created backup directories remain readable by the app under a strict umask. Existing root-only directories can be repaired with `sudo chmod 755 "/Library/Application Support/Resolute"`.
+- Malformed private mode records cannot overflow dimensions or introduce conflicting mode IDs. Private calls check that the display is online.
+- Display names are read on the main thread and remain unique when a real name already ends in a number. Ambiguous display-name selectors are rejected.
+- CLI rates and scales reject hexadecimal and exponential notation. Requests using render-buffer dimensions suggest the corresponding HiDPI logical size.
+- Privileged failures show the underlying error instead of the osascript wrapper.
+- Failed installation copies preserve the previous app. Install and uninstall preserve unrelated command-line tools and links to other installations.
 
 ### Changed
 
-- Keep, chosen after the display went away during the countdown, now says the mode was not saved and lasts at most until you log out.
-- A mode chosen in the menu while the Keep/Revert countdown is up is ignored: its own alert or countdown would have stopped the first one from reverting.
-- JSON output always has every documented key, with `null` for a missing value.
-- `resolute modes` labels a resolution Default or Native, like the menu, instead of listing both.
-- The ⌥ hint in the menu counts the resolutions it reveals, not every hidden mode.
-- `resolute overrides reset` says how to undo it.
-- At its smallest size the editor moves Revert and Save… to a second row instead of cutting button titles short.
-- `make release` builds the zip, the disk image and their checksums, with the version's notes for a GitHub release, and `SIGN_IDENTITY` signs with a real certificate. CI lints and tests on the oldest and newest supported Xcode.
+- App and release builds default to Apple silicon; `UNIVERSAL=1` enables optional Intel compilation. CI targets Apple silicon on the configured Xcode matrix.
+- **Remove Override…** warns when it also discards unsaved edits; `resolute overrides reset` explains how to undo removal.
+- JSON output includes every documented key, with `null` for missing values.
+- `resolute modes` uses one Default or Native label per resolution, and the menu's ⌥ hint counts hidden resolutions rather than individual modes.
+- At its smallest size, the editor moves Revert and **Save…** to a second row so their titles remain visible.
+- `make release` prepares ZIP/DMG archives, checksums and version-specific notes without publishing them. `SIGN_IDENTITY` and `NOTARY_PROFILE` configure Developer ID signing and notarization; default builds remain ad hoc signed, and the notarized distribution path still needs validation.
 
 ## 0.2.0 — 2026-09-25
 

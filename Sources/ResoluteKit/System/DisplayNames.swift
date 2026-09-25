@@ -31,9 +31,11 @@ enum DisplayNames {
     /// The product name CoreDisplay reports; covers mirrored and inactive displays.
     static func coreDisplayName(for display: CGDirectDisplayID) -> String? {
         typealias InfoFunction = @convention(c) (CGDirectDisplayID) -> Unmanaged<CFDictionary>?
-        guard let framework = dlopen("/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY),
-              let symbol = dlsym(framework, "CoreDisplay_DisplayCreateInfoDictionary")
-        else { return nil }
+        guard let framework = dlopen("/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY) else {
+            return nil
+        }
+        defer { dlclose(framework) }
+        guard let symbol = dlsym(framework, "CoreDisplay_DisplayCreateInfoDictionary") else { return nil }
         let copyInfo = unsafeBitCast(symbol, to: InfoFunction.self)
         guard let info = copyInfo(display)?.takeRetainedValue() as? [String: Any],
               let names = info["DisplayProductName"] as? [String: String],

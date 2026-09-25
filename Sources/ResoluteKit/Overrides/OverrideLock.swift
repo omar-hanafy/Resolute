@@ -24,14 +24,24 @@ public struct OverrideLock: Sendable {
 
     /// Opens and locks the file, polling so no thread is held while another edit runs.
     private func acquire(onWait: () -> Void) async throws -> Int32 {
-        // The app lists the backups beside the lock as the user, whatever umask sudo passed on.
-        try? FileManager.default.createDirectory(
-            at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755]
-        )
         let path = file.path(percentEncoded: false)
-        let descriptor = open(path, O_RDONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o644)
+        do {
+            try await ShellCommandRunner().run(
+                "set -e; umask 022; " + OverrideInstaller.pathSafetyFunctions + "; safe_directory "
+                    + Shell.quote(file.deletingLastPathComponent().path(percentEncoded: false))
+                    + "; safe_file " + Shell.quote(path)
+            )
+        } catch {
+            throw ResoluteError.lockUnavailable(path: path, reason: error.localizedDescription)
+        }
+        let descriptor = open(path, O_RDONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o644)
         guard descriptor >= 0 else {
             throw ResoluteError.lockUnavailable(path: path, reason: Self.describe(errno))
+        }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1 else {
+            close(descriptor)
+            throw ResoluteError.lockUnavailable(path: path, reason: "it is not a regular file with a single link")
         }
         let deadline = ContinuousClock.now + timeout
         var hasWaited = false

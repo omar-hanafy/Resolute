@@ -9,7 +9,8 @@ test:
 lint:
 	shellcheck Scripts/*.sh
 
-# Also switches the main display's refresh rate for a moment and back.
+# Switches the selected display's refresh rate and back (main by default).
+# Example: RESOLUTE_LIVE_DISPLAY=GM34-CWQ make live-test
 live-test:
 	RESOLUTE_LIVE_TESTS=1 swift test --filter LiveDisplayTests
 

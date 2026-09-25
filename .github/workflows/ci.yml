@@ -8,6 +8,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -17,32 +20,44 @@ jobs:
     if: ${{ !github.event.repository.private || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: shellcheck
         run: shellcheck Scripts/*.sh
       - name: actionlint
         run: |
-          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          curl --fail --location --retry 3 --output actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz' | sha256sum --check
+          tar -xzf actionlint.tar.gz actionlint
           ./actionlint -color
 
   test:
     if: ${{ !github.event.repository.private || github.event_name == 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
-      # The oldest and newest Xcode each runner image offers (swift-tools-version is 6.0,
-      # first supported by Xcode 16.0). Each needs the runner image that ships it.
+      # Apple silicon is the supported release path. Keep the oldest Swift 6 toolchain
+      # and the current OS/SDK covered; Intel is an optional UNIVERSAL=1 local build.
       matrix:
         include:
           - os: macos-15
             xcode: "16.0"
           - os: macos-26
             xcode: "26.6"
+          - os: xcode-27
+            xcode: "27.0"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Select Xcode ${{ matrix.xcode }}
-        run: sudo xcode-select -s "/Applications/Xcode_${{ matrix.xcode }}.app"
+        env:
+          XCODE_VERSION: ${{ matrix.xcode }}
+        run: sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app"
       - run: swift --version
       - run: swift build
       - run: swift test
-      - run: UNIVERSAL=1 Scripts/build-app.sh
+      - run: Scripts/build-app.sh

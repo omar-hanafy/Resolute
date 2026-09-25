@@ -51,7 +51,13 @@ public struct PrivateModeRecord: Hashable, Sendable {
         let height = Int(word(0x0C))
         let pixelWidth = Int(word(0xC8))
         let pixelHeight = Int(word(0xCC))
-        guard scale.isFinite, scale > 0, width > 0, height > 0, pixelWidth > 0, pixelHeight > 0 else {
+        // Hidden records have no public counterpart to cross-check. Bound every size
+        // before catalog arithmetic and require the backing dimensions to agree with
+        // the record's scale; a readable layout marker alone is not enough.
+        guard ModeQuery.isPlausible(scale: scale),
+              [width, height, pixelWidth, pixelHeight].allSatisfy({ (1...ModeQuery.maximumDimension).contains($0) }),
+              abs(Double(pixelWidth) / Double(width) - scale) < 0.01,
+              abs(Double(pixelHeight) / Double(height) - scale) < 0.01 else {
             return nil
         }
         self.index = Int32(bitPattern: word(0x00))
@@ -122,6 +128,7 @@ public enum PrivateModeValidator {
     ) -> PrivateModeValidation {
         guard !records.isEmpty else { return .untrusted(reason: "SkyLight reported no modes") }
         var decoded: [PrivateModeRecord] = []
+        var recordsByID: [Int32: PrivateModeRecord] = [:]
         for (position, record) in records.enumerated() {
             guard let record else {
                 return .untrusted(reason: "record \(position) has an unrecognised layout")
@@ -129,6 +136,11 @@ public enum PrivateModeValidator {
             guard record.index == Int32(position) else {
                 return .untrusted(reason: "record \(position) reports index \(record.index)")
             }
+            if let previous = recordsByID[record.modeID],
+               (!agrees(record, previous.mode(origin: .hidden)) || record.bitsPerSample != previous.bitsPerSample) {
+                return .untrusted(reason: "mode ID \(record.modeID) has conflicting SkyLight records")
+            }
+            recordsByID[record.modeID] = record
             decoded.append(record)
         }
         let systemByID = Dictionary(systemModes.map { ($0.modeID, $0) }, uniquingKeysWith: { first, _ in first })

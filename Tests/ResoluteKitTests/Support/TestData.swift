@@ -144,6 +144,7 @@ final class FakeDisplayService: DisplayControlling, @unchecked Sendable {
     private let ignoredModeIDs: Set<Int32>
     private let reportsCurrentMode: Bool
     private var recorded: [Call] = []
+    private var recordedDisplayIDs: [CGDirectDisplayID] = []
     /// Snapshots that still show the old mode after a switch, as a slow display might.
     private var staleSnapshots: Int
     private var reported: Display
@@ -171,6 +172,18 @@ final class FakeDisplayService: DisplayControlling, @unchecked Sendable {
         lock.withLock { recorded }
     }
 
+    var appliedDisplayIDs: [CGDirectDisplayID] {
+        lock.withLock { recordedDisplayIDs }
+    }
+
+    func replaceDisplay(_ replacement: Display) {
+        lock.withLock {
+            display = replacement
+            reported = replacement
+            staleSnapshots = 0
+        }
+    }
+
     func displays() -> [Display] {
         lock.withLock {
             if staleSnapshots > 0 {
@@ -192,6 +205,7 @@ final class FakeDisplayService: DisplayControlling, @unchecked Sendable {
                 throw ResoluteError.coreGraphics(code: 1001, operation: "select the display mode")
             }
             recorded.append(Call(modeID: modeID, scope: scope))
+            recordedDisplayIDs.append(displayID)
             if !ignoredModeIDs.contains(modeID) { display.currentModeID = modeID }
         }
     }

@@ -4,7 +4,10 @@ import Testing
 /// Checks the install/uninstall scripts: syntax, shellcheck, and the shared
 /// quit-and-wait logic in Scripts/lib.sh. The quit-and-wait tests stub osascript, so
 /// nothing here ever asks a real application to quit.
-@Suite struct ScriptTests {
+// These integration tests launch real child processes with bounded shutdown deadlines.
+// Launching all install/uninstall scenarios together can starve a child before its
+// first instruction and test scheduler pressure instead of the shutdown behavior.
+@Suite(.serialized) struct ScriptTests {
     /// Tests/ResoluteKitTests/ScriptTests.swift -> Tests/ResoluteKitTests -> Tests -> repo root.
     static let repoRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
@@ -435,6 +438,52 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: installedApp.appending(path: "Contents/marker").path))
         let plist = try String(contentsOf: installedApp.appending(path: "Contents/Info.plist"), encoding: .utf8)
         #expect(plist.contains("0.3.0"))
+    }
+
+    @Test func failedCopyPreservesTheWorkingInstallation() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let sandbox = try Self.makeSandbox(in: folder, running: true)
+        let installed = sandbox.appDir.appending(path: "Resolute.app")
+        try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
+        try Data("working copy".utf8).write(to: installed.appending(path: "marker"))
+        let ditto = folder.appending(path: "stubbin/ditto")
+        try Data("#!/bin/sh\necho 'copy failed: disk full' >&2\nexit 1\n".utf8).write(to: ditto)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ditto.path)
+        let result = try Self.run("/bin/bash", [sandbox.repo.appending(path: "Scripts/install.sh").path], env: sandbox.env)
+        #expect(result.status != 0)
+        #expect(try String(contentsOf: installed.appending(path: "marker"), encoding: .utf8) == "working copy")
+        #expect(!(try Self.calls(sandbox.callsLog)).contains { $0.contains("to quit") || $0.hasPrefix("open ") })
+    }
+
+    @Test(arguments: [false, true]) func installPreservesAnUnrelatedCLI(symlink: Bool) throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let sandbox = try Self.makeSandbox(in: folder, running: false)
+        let command = sandbox.binDir.appending(path: "resolute")
+        let other = folder.appending(path: "other-tool")
+        try Data("other tool".utf8).write(to: other)
+        if symlink {
+            try FileManager.default.createSymbolicLink(at: command, withDestinationURL: other)
+        } else {
+            try Data("other tool".utf8).write(to: command)
+        }
+        let result = try Self.run("/bin/bash", [sandbox.repo.appending(path: "Scripts/install.sh").path], env: sandbox.env)
+        #expect(result.status == 0)
+        #expect(try String(contentsOf: command, encoding: .utf8) == "other tool")
+        #expect(result.output.contains("Kept the existing"))
+    }
+
+    @Test func uninstallLeavesALinkToAnotherResoluteInstallation() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let sandbox = try Self.makeSandbox(in: folder, running: false)
+        let command = sandbox.binDir.appending(path: "resolute")
+        let other = folder.appending(path: "Another/Resolute.app/Contents/Helpers/resolute")
+        try FileManager.default.createSymbolicLink(at: command, withDestinationURL: other)
+        let result = try Self.run("/bin/bash", [sandbox.repo.appending(path: "Scripts/uninstall.sh").path], env: sandbox.env)
+        #expect(result.status == 0)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: command.path) == other.path)
     }
 
     @Test func installStopsAndChangesNothingWhenTheAppNeverQuits() throws {

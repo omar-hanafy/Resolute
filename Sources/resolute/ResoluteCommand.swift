@@ -148,6 +148,9 @@ struct CommandContext: Sendable {
     var restorePollInterval: TimeInterval = 0.5
     /// Ctrl-C during a trial; `live` catches the real one.
     var interrupts = Interrupts()
+    /// Hidden modes need a person who can see and confirm the result. Tests provide
+    /// their own confirmation closure; the live context checks its actual terminal.
+    var canConfirmHiddenMode = true
 
     static var live: CommandContext {
         CommandContext(
@@ -156,7 +159,8 @@ struct CommandContext: Sendable {
             writeError: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) },
             confirmHiddenMode: { SetCommand.askToKeep() },
             isRoot: geteuid() == 0,
-            interrupts: .process
+            interrupts: .process,
+            canConfirmHiddenMode: isatty(STDIN_FILENO) != 0
         )
     }
 }

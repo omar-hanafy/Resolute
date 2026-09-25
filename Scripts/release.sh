@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds a universal Resolute.app and packages it for release:
+# Builds an Apple silicon Resolute.app (UNIVERSAL=1 adds Intel) and packages it:
 #   dist/Resolute-<version>.zip, dist/Resolute-<version>.dmg, dist/SHA256SUMS
 #   SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" NOTARY_PROFILE=my-profile Scripts/release.sh
 # SIGN_IDENTITY is passed through to build-app.sh (default ad hoc; see there). With
@@ -24,7 +24,7 @@ if [[ -n "${NOTARY_PROFILE:-}" ]]; then
   esac
 fi
 
-UNIVERSAL=1 SIGN_IDENTITY="$SIGN_IDENTITY" Scripts/build-app.sh
+SIGN_IDENTITY="$SIGN_IDENTITY" Scripts/build-app.sh
 
 VERSION="$(sed -n 's/.*static let string = "\(.*\)".*/\1/p' Sources/ResoluteKit/Version.swift)"
 APP="dist/Resolute.app"

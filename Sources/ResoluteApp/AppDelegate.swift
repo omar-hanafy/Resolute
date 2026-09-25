@@ -35,6 +35,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Command-Q remains available even while a modal confirmation is running.
+        // Ending the process here would abandon the session mode or an in-flight write.
+        guard modeChanges?.isChangingMode != true, customResolutions?.model.isWorking != true else {
+            NSSound.beep()
+            return .terminateCancel
+        }
+        if modeChanges?.pendingRestores.isEmpty == false {
+            let alert = NSAlert()
+            alert.messageText = "Quit before the display mode is restored?"
+            alert.informativeText = "Resolute is waiting to restore a display's previous mode. Quitting stops recovery; the trial mode may remain until you log out."
+            alert.addButton(withTitle: "Keep Waiting")
+            alert.addButton(withTitle: "Quit Anyway")
+            NSApp.activate()
+            guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
+        }
         guard let model = customResolutions?.model, model.hasChanges else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = "Quit without saving your custom resolutions?"

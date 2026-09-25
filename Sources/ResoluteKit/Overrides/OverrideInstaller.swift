@@ -73,8 +73,7 @@ public struct OverrideInstaller: Sendable {
         guard !backups.isEmpty else { return }
         let root = locations.backupRoot.standardizedFileURL.path(percentEncoded: false)
         for backup in backups {
-            let folder = backup.file.standardizedFileURL.deletingLastPathComponent().deletingLastPathComponent()
-            guard folder.path(percentEncoded: false) == root else {
+            guard locations.contains(backup) else {
                 throw ResoluteError.invalidEntry("\(backup.file.path(percentEncoded: false)) is not a backup in \(root).")
             }
         }
@@ -130,7 +129,9 @@ public struct OverrideInstaller: Sendable {
     func locked(_ script: String) -> String {
         guard let scriptLock else { return script }
         let folder = scriptLock.deletingLastPathComponent().path(percentEncoded: false)
-        return "umask 022; mkdir -p \(Shell.quote(folder)) && exec /usr/bin/lockf -k -s -t \(scriptLockTimeout) "
+        return "set -e; umask 022; " + Self.pathSafetyFunctions + "; "
+            + "safe_directory \(Shell.quote(folder)); safe_file \(Shell.quote(scriptLock.path(percentEncoded: false))); "
+            + "exec /usr/bin/lockf -k -s -t \(max(0, scriptLockTimeout)) "
             + "\(Shell.quote(scriptLock.path(percentEncoded: false))) /bin/sh -c \(Shell.quote(script))"
     }
 
@@ -158,15 +159,18 @@ public struct OverrideInstaller: Sendable {
             "set -e",
             // WindowServer must be able to read what root writes, whatever umask sudo passes on.
             "umask 022",
+            pathSafetyFunctions,
+            "safe_directory \(Shell.quote(folder))",
+            "safe_file \(file)",
             checkCommand(file: file, state: state),
             backupCommand(file: file, stem: backupStem),
-            "mkdir -p \(Shell.quote(folder))",
+
             // Written beside the destination and renamed over it, so the file appears whole.
-            "incoming=$(mktemp \(Shell.quote(template)))",
-            "trap 'rm -f \"$incoming\"' EXIT",
+            "incoming=$(/usr/bin/mktemp \(Shell.quote(template)))",
+            "trap '/bin/rm -f \"$incoming\"' EXIT",
             "printf '%s' \(Shell.quote(contents.base64EncodedString())) | /usr/bin/base64 -D > \"$incoming\"",
-            "chmod 644 \"$incoming\"",
-            "mv -f \"$incoming\" \(file)",
+            "/bin/chmod 644 \"$incoming\"",
+            "/bin/mv -f \"$incoming\" \(file)",
         ] as [String?]).compactMap { $0 }.joined(separator: "; ")
     }
 
@@ -176,24 +180,32 @@ public struct OverrideInstaller: Sendable {
         return ([
             "set -e",
             "umask 022",
+            pathSafetyFunctions,
+            "check_directory \(folder)",
+            "safe_file \(file)",
             checkCommand(file: file, state: state),
             backupCommand(file: file, stem: backupStem),
-            "rm -f \(file)",
-            "rmdir \(folder) 2>/dev/null || true",
+            "/bin/rm -f \(file)",
+            "/bin/rmdir \(folder) 2>/dev/null || true",
         ] as [String?]).compactMap { $0 }.joined(separator: "; ")
     }
 
     /// Deletes each file that is a regular file (a link could point anywhere), then each
     /// folder that is left empty.
     static func removeBackupsScript(files: [URL]) -> String {
-        var commands = ["set -e"]
+        var commands = ["set -e", pathSafetyFunctions]
+        // Validate every path before deleting any file.
+        for file in files {
+            commands.append("check_directory \(Shell.quote(file.deletingLastPathComponent().path(percentEncoded: false)))")
+            commands.append("safe_file \(Shell.quote(file.path(percentEncoded: false)))")
+        }
         for file in files {
             let path = Shell.quote(file.path(percentEncoded: false))
-            commands.append("if [ -f \(path) ] && [ ! -L \(path) ]; then rm -f \(path); fi")
+            commands.append("if [ -f \(path) ] && [ ! -L \(path) ]; then /bin/rm -f \(path); fi")
         }
         let folders = Set(files.map { $0.deletingLastPathComponent().path(percentEncoded: false) })
         for folder in folders.sorted() {
-            commands.append("rmdir \(Shell.quote(folder)) 2>/dev/null || true")
+            commands.append("/bin/rmdir \(Shell.quote(folder)) 2>/dev/null || true")
         }
         return commands.joined(separator: "; ")
     }
@@ -206,15 +218,63 @@ public struct OverrideInstaller: Sendable {
         case nil:
             return nil
         case .absent?:
-            // Through a link too: a link to a file that is gone is no override, to macOS and
-            // to the read, and `mv` replaces the link itself.
+            // Path safety rejects links before the optimistic state check.
             return "if [ -e \(file) ]; then \(changed); fi"
         case .contents(let data)?:
-            // Through a link, as the file was read: an override may be linked into place.
+            // Compare bytes only after confirming the destination is a regular file.
             return "if [ ! -f \(file) ] || ! printf '%s' \(Shell.quote(data.base64EncodedString())) "
                 + "| /usr/bin/base64 -D | /usr/bin/cmp -s - \(file); then \(changed); fi"
         }
     }
+
+    /// Validate paths in the process that performs the write, after authorization. Root
+    /// only traverses root-owned, non-writable directories, so an unprivileged process
+    /// cannot swap a checked component before the following rename/copy/unlink.
+    /// Staging remains usable as a normal user. The two macOS system aliases are the
+    /// only directory symlinks accepted, and only for unprivileged staging.
+    static let pathSafetyFunctions = #"""
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
+    safe_uid=$(/usr/bin/id -u)
+    unsafe_path() { echo "Refusing unsafe override path: $1" >&2; exit 1; }
+    trusted_node() {
+        if [ "$safe_uid" = 0 ]; then
+            [ "$(/usr/bin/stat -f %u "$1")" = 0 ] || unsafe_path "$1"
+            mode=$(/usr/bin/stat -f %Lp "$1")
+            [ "$((0$mode & 022))" = 0 ] || unsafe_path "$1"
+            # ACL write grants are not represented by the POSIX mode bits.
+            [ -z "$(/bin/ls -lde "$1" | /usr/bin/sed -n '2p')" ] || unsafe_path "$1"
+        fi
+    }
+    check_directory() {
+        [ "$1" = / ] && return
+        set -- "${1%/}"
+        parent=$(/usr/bin/dirname "$1")
+        check_directory "$parent"
+        if [ -L "$1" ]; then
+            case "$1" in /var|/tmp)
+                [ "$safe_uid" != 0 ] && return;;
+            esac
+            unsafe_path "$1"
+        fi
+        if [ -e "$1" ]; then
+            [ -d "$1" ] || unsafe_path "$1"
+            trusted_node "$1"
+        fi
+    }
+    safe_directory() {
+        check_directory "$1"
+        /bin/mkdir -p "$1"
+        check_directory "$1"
+    }
+    safe_file() {
+        [ ! -L "$1" ] || unsafe_path "$1"
+        if [ -e "$1" ]; then
+            [ -f "$1" ] || unsafe_path "$1"
+            [ "$(/usr/bin/stat -f %l "$1")" = 1 ] || unsafe_path "$1"
+            trusted_node "$1"
+        fi
+    }
+    """#
 
     /// Copies the file about to change to "<stem>.plist", or "<stem>-2.plist" and so on.
     /// Each name is claimed with an exclusive create (`set -C`), so installs that overlap
@@ -225,9 +285,9 @@ public struct OverrideInstaller: Sendable {
         let base = Shell.quote(stem.path(percentEncoded: false))
         let noBackup = Shell.quote("Could not create a backup in \(folderPath)")
         let noCopy = Shell.quote("Could not back up the file being replaced.")
-        return "if [ -f \(file) ]; then mkdir -p \(Shell.quote(folderPath)); n=1; backup=\(base).plist; "
+        return "if [ -f \(file) ]; then safe_directory \(Shell.quote(folderPath)); n=1; backup=\(base).plist; "
             + "until (set -C; : > \"$backup\") 2>/dev/null; do "
             + "[ -e \"$backup\" ] || { echo \(noBackup) >&2; exit 1; }; n=$((n + 1)); backup=\(base)-$n.plist; done; "
-            + "cp -p \(file) \"$backup\" || { rm -f \"$backup\"; echo \(noCopy) >&2; exit 1; }; fi"
+            + "/bin/cp \(file) \"$backup\" || { /bin/rm -f \"$backup\"; echo \(noCopy) >&2; exit 1; }; fi"
     }
 }

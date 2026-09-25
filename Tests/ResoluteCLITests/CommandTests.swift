@@ -55,6 +55,21 @@ import Testing
 }
 
 @Suite struct SetCommandTests {
+    @Test(arguments: [false, true]) func refusesUnattendedHiddenChangesBeforeSwitching(session: Bool) async {
+        let service = FakeDisplays([Sample.monitor])
+        let transcript = Transcript()
+        var context = transcript.context(service: service, isRoot: false, decision: .keep)
+        context.canConfirmHiddenMode = false
+        let args = ["set", "--mode-id", "90", "--allow-hidden", "-d", "dell"] + (session ? ["--session"] : [])
+        let result = await ResoluteCommand.execute(args, in: context)
+        #expect(result.code == 64)
+        #expect(result.message?.contains("interactive terminal") == true)
+        #expect(service.changes.isEmpty)
+        let preview = await ResoluteCommand.execute(args + ["--dry-run"], in: context)
+        #expect(preview.code == 0)
+        #expect(service.changes.isEmpty)
+    }
+
     @Test func savesAListedMode() async throws {
         let service = FakeDisplays([Sample.builtIn])
         let transcript = try await resolute(["set", "1496x967"], service: service)

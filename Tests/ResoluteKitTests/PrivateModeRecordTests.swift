@@ -66,6 +66,19 @@ import Testing
         for offset in 0xD0..<0xD4 { bytes[offset] = 0 }
         #expect(PrivateModeRecord(bytes: bytes) == nil)
     }
+
+    @Test func rejectsDimensionsThatCouldOverflowCatalogArithmetic() {
+        var bytes = capture.records[0]
+        for offset in 0x08..<0x10 { bytes[offset] = 0xff }
+        #expect(PrivateModeRecord(bytes: bytes) == nil)
+    }
+
+    @Test func rejectsBackingDimensionsThatContradictTheScale() {
+        var bytes = capture.records[0]
+        // The width and height now claim to equal the logical size, while scale stays 2.
+        bytes.replaceSubrange(0xC8..<0xD0, with: bytes[0x08..<0x10])
+        #expect(PrivateModeRecord(bytes: bytes) == nil)
+    }
 }
 
 @Suite struct PrivateModeValidatorTests {
@@ -134,6 +147,17 @@ import Testing
             == .untrusted(reason: "SkyLight reported no modes"))
         #expect(PrivateModeValidator.validate(records: records, against: [])
             == .untrusted(reason: "no SkyLight record matches a CoreGraphics mode"))
+    }
+
+    @Test func distrustsConflictingHiddenRecordsWithTheSameModeID() throws {
+        var duplicated = records
+        var duplicate = try #require(records.last ?? nil)
+        duplicate.index = Int32(records.count)
+        duplicate.refreshRate += 10
+        duplicated.append(duplicate)
+        let visible = capture.modes.filter { $0.modeID != duplicate.modeID }
+        #expect(PrivateModeValidator.validate(records: duplicated, against: visible)
+            == .untrusted(reason: "mode ID \(duplicate.modeID) has conflicting SkyLight records"))
     }
 }
 

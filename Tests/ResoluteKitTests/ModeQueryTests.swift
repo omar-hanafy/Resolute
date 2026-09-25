@@ -225,4 +225,14 @@ import Testing
         ]
         #expect(try DisplaySelector.name("lg").resolve(in: similar).id == 5)
     }
+
+    @Test func rejectsCaseInsensitiveExactNameCollisions() {
+        let similar = [
+            Display(id: 5, name: "LG", currentModeID: nil, modes: []),
+            Display(id: 6, name: "lg", currentModeID: nil, modes: []),
+        ]
+        #expect(throws: ResoluteError.ambiguousDisplay("lg", matches: ["LG", "lg"])) {
+            try DisplaySelector.name("lg").resolve(in: similar)
+        }
+    }
 }

@@ -6,8 +6,9 @@ import ResoluteKit
 /// and only kept when the person confirms, so a mode the display cannot show reverts.
 ///
 /// A display that cannot show a mode may lose its link during the countdown. Its revert
-/// then waits for the display to come back, which `displaysDidChange()` hears about,
-/// without holding the main thread and without alerts while the display is away. After
+/// then waits for the display to come back, which `displaysDidChange()` hears about.
+/// A connected display that refuses its previous mode is retried too, without holding
+/// the main thread or showing repeated alerts during recovery. After
 /// `restoreTimeout` the revert gets one last try and is given up; the mode lasts at most
 /// until logout.
 @MainActor
@@ -57,7 +58,10 @@ final class ModeChangeCoordinator {
         self.retryInterval = retryInterval
     }
 
-    /// The reverts waiting for their display.
+    /// No other menu action or termination may interrupt a mode trial.
+    var isChangingMode: Bool { switchesUnderWay > 0 }
+
+    /// Reverts waiting for their display to reconnect or accept its previous mode.
     var pendingRestores: [ModeSwitcher.PendingRestore] {
         waiting.values.map(\.restore).sorted { $0.displayID < $1.displayID }
     }
@@ -101,14 +105,20 @@ final class ModeChangeCoordinator {
             // does choosing the mode on trial again, which answers no countdown.
             if let earlier { waiting[displayID] = earlier }
         case .restorePending(let restore):
-            // Undoing both trials means going back to the mode from before the first one.
-            wait(for: earlier.map {
-                ModeSwitcher.PendingRestore(
+            // Undo both trials only when they belong to the same physical display.
+            // CoreGraphics may reuse the old display ID after a disconnect.
+            if let earlier, earlier.restore.displayIdentity == restore.displayIdentity {
+                wait(for: ModeSwitcher.PendingRestore(
                     displayID: restore.displayID, displayName: restore.displayName,
-                    modeID: $0.restore.modeID, fallbackModeID: $0.restore.fallbackModeID,
-                    trialModeID: restore.trialModeID, failure: restore.failure
-                )
-            } ?? restore)
+                    modeID: earlier.restore.modeID, fallbackModeID: earlier.restore.fallbackModeID,
+                    trialModeID: restore.trialModeID, failure: restore.failure,
+                    displayIdentity: earlier.restore.displayIdentity,
+                    previousMode: earlier.restore.previousMode, fallbackMode: earlier.restore.fallbackMode,
+                    trialMode: restore.trialMode
+                ))
+            } else {
+                wait(for: restore)
+            }
         case .applied, .kept, .keptForSession:
             // The person's new choice replaces the earlier revert.
             if let earlier {
@@ -197,6 +207,9 @@ final class ModeChangeCoordinator {
     private func wait(for restore: ModeSwitcher.PendingRestore) {
         let deadline = now() + restoreTimeout
         waiting[restore.displayID] = Waiting(restore: restore, deadline: deadline)
+        // A connected display can briefly refuse the previous mode without emitting a
+        // further screen notification. Start recovery promptly in that case too.
+        retrySoon(restore.displayID)
         Task { [weak self] in
             try? await Task.sleep(until: deadline, clock: .continuous)
             self?.expireRestores()

@@ -14,6 +14,12 @@ struct AddResolutionSheet: View {
     @State private var ratio: AspectRatio?
     @State private var flagsText = HiDPIFlags.standard.description
     @State private var error: String?
+    @State private var target: OverrideKey?
+
+    init(model: CustomResolutionsModel) {
+        self.model = model
+        _target = State(initialValue: model.selection)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,7 +83,7 @@ struct AddResolutionSheet: View {
     private func add() {
         do {
             let entry = try ResolutionInput.entry(width: widthText, height: heightText, hiDPI: hiDPI, flags: flagsText)
-            if let message = model.add(entry) {
+            if let message = model.add(entry, to: target) {
                 error = message
             } else {
                 dismiss()

@@ -1,5 +1,6 @@
 import AppKit
 import Testing
+import ResoluteKit
 @testable import ResoluteApp
 
 @MainActor
@@ -9,6 +10,15 @@ import Testing
             with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode
         ))
+    }
+
+    @Test func refusesKeepAtOrAfterTheDeadline() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let countdown = RevertCountdown(start: start, duration: 15)
+        #expect(ConfirmationPanel.accepts(.alertSecondButtonReturn, countdown: countdown, at: start.addingTimeInterval(14.99)))
+        #expect(!ConfirmationPanel.accepts(.alertSecondButtonReturn, countdown: countdown, at: countdown.deadline))
+        #expect(!ConfirmationPanel.accepts(.alertSecondButtonReturn, countdown: countdown, at: start.addingTimeInterval(16)))
+        #expect(!ConfirmationPanel.accepts(.alertFirstButtonReturn, countdown: countdown, at: start))
     }
 
     /// NSAlert gives Escape only to a button titled Cancel, so in "Keep this display

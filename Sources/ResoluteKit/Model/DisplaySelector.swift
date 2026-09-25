@@ -48,8 +48,12 @@ public enum DisplaySelector: Hashable, Sendable, CustomStringConvertible {
             }
             return display
         case .name(let name):
-            if let exact = displays.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
-                return exact
+            let exact = displays.filter { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+            if !exact.isEmpty {
+                guard exact.count == 1 else {
+                    throw ResoluteError.ambiguousDisplay(name, matches: exact.map(\.name))
+                }
+                return exact[0]
             }
             let matches = displays.filter { $0.name.localizedCaseInsensitiveContains(name) }
             guard !matches.isEmpty else { throw ResoluteError.displayNotFound(name) }

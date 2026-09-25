@@ -322,6 +322,9 @@ final class CustomResolutionsModel {
     // MARK: - Targets
 
     func reloadTargets() {
+        // Screen notifications still arrive while an administrator prompt is open.
+        // Keep the operation's target and draft until its result has been handled.
+        guard !isWorking else { return }
         let installed = store.installedKeys()
         var seen = Set<OverrideKey>()
         var result: [Target] = []
@@ -335,8 +338,8 @@ final class CustomResolutionsModel {
                 ?? "Display \(String(key.vendorID, radix: 16)):\(String(key.productID, radix: 16))"
             result.append(Target(key: key, name: name, isConnected: false, hasOverride: true))
         }
-        // A display with unsaved changes stays listed after it is unplugged.
-        if let selection, hasChanges, !result.contains(where: { $0.key == selection }),
+        // Keep unsaved work and an unresolved file decision visible after unplugging.
+        if let selection, (hasChanges || conflict != nil), !result.contains(where: { $0.key == selection }),
            let edited = targets.first(where: { $0.key == selection }) {
             result.append(Target(key: selection, name: edited.name, isConnected: false, hasOverride: edited.hasOverride))
         }
@@ -362,13 +365,20 @@ final class CustomResolutionsModel {
 
     func discardChangesAndSelectPending() {
         guard let key = pendingSelection else { return }
+        discardChangesAndSelect(key)
+    }
+
+    /// The dialog captures its target because SwiftUI may clear its presentation binding
+    /// before invoking the selected button.
+    func discardChangesAndSelect(_ key: OverrideKey) {
+        guard !isWorking, targets.contains(where: { $0.key == key }) else { return }
         pendingSelection = nil
         draft?.revert()
         select(key)
     }
 
     func select(_ key: OverrideKey?) {
-        guard key != selection || draft == nil else { return }
+        guard !isWorking, key != selection || draft == nil else { return }
         selection = key
         load()
     }
@@ -449,9 +459,19 @@ final class CustomResolutionsModel {
 
     // MARK: - Editing
 
+    /// The Add sheet belongs to the display selected when it opened. A disconnect can
+    /// select another display while the sheet is still visible.
+    func add(_ entry: ScaleResolution, to key: OverrideKey?) -> String? {
+        guard let key, key == selection else {
+            return "The selected display changed. Close this sheet and choose the display again."
+        }
+        return add(entry)
+    }
+
     /// Adds an entry; returns a message when it is not valid.
     func add(_ entry: ScaleResolution) -> String? {
         guard !isWorking else { return "Wait until the save finishes." }
+        guard draft != nil else { return "Choose a display with an editable override first." }
         do {
             try draft?.add(entry)
             return nil
@@ -585,7 +605,10 @@ final class CustomResolutionsModel {
     /// `state`: someone may change it between the check and the password prompt.
     private func run(_ change: Conflict.Change, on key: OverrideKey, expecting state: OverrideFileState?) async {
         isWorking = true
-        defer { isWorking = false }
+        defer {
+            isWorking = false
+            reloadTargets()
+        }
         do {
             switch change {
             case .save:
@@ -621,7 +644,6 @@ final class CustomResolutionsModel {
                         + (state == .absent ? "" : " The file it replaced is in the backups too.")
                 )
             }
-            reloadTargets()
         } catch ResoluteError.cancelled {
             return
         } catch ResoluteError.overrideChanged {

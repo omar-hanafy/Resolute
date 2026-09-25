@@ -6,7 +6,7 @@ enum AboutPanel {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         let credits = NSAttributedString(
-            string: "Switch any display to any mode from the menu bar, including the ones macOS hides.\nA ground-up successor to RDM.",
+            string: "Choose available resolutions and refresh rates from the menu bar, including validated modes macOS hides.\nBuilt for Apple silicon. A ground-up successor to RDM.",
             attributes: [
                 .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
                 .foregroundColor: NSColor.secondaryLabelColor,

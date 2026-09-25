@@ -50,11 +50,12 @@ struct CustomResolutionsView: View {
             isPresented: Binding(
                 get: { model.pendingSelection != nil },
                 set: { if !$0 { model.cancelPendingSelection() } }
-            )
-        ) {
-            Button("Discard Changes", role: .destructive) { model.discardChangesAndSelectPending() }
+            ),
+            presenting: model.pendingSelection
+        ) { key in
+            Button("Discard Changes", role: .destructive) { model.discardChangesAndSelect(key) }
             Button("Keep Editing", role: .cancel) { model.cancelPendingSelection() }
-        } message: {
+        } message: { _ in
             Text("Your custom resolutions have not been saved.")
         }
         .alert(

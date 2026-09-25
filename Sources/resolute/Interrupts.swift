@@ -69,11 +69,14 @@ final class Interrupts: Sendable {
         guard self === Interrupts.process else { return try body() }
         drain()
         controlCWriteEnd = writeEnd
-        let previous = signal(SIGINT) { _ in
+        let handler: @convention(c) (Int32) -> Void = { _ in
             var byte: UInt8 = 1
             _ = write(controlCWriteEnd, &byte, 1)
         }
-        defer { signal(SIGINT, previous) }
+        // Closing a terminal or asking the process to terminate must also undo a trial.
+        // SIGKILL cannot be handled; logout remains the recovery boundary for that case.
+        let previous = [SIGINT, SIGTERM, SIGHUP].map { ($0, signal($0, handler)) }
+        defer { for (number, oldHandler) in previous { signal(number, oldHandler) } }
         return try body()
     }
 }

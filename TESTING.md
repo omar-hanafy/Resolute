@@ -8,7 +8,18 @@ make lint        # shellcheck on the scripts
 make live-test   # also switches the main display's refresh rate for a moment and back
 ```
 
+Target an external display explicitly; the main screen may still be the built-in one:
+
+```sh
+RESOLUTE_LIVE_DISPLAY=GM34-CWQ make live-test
+RESOLUTE_LIVE_DISPLAY=GM34-CWQ RESOLUTE_LIVE_SCALES=2752x1152,2408x1008 make live-test
+```
+
+The optional scale list selects each listed size without specifying a refresh rate, checks that the original rate is retained, and reverts after each trial. `RESOLUTE_LIVE_HIDDEN_MODE=<fresh-mode-id>` opts into one inspected hidden mode; this requires a second unmirrored display. Read `resolute modes -d <display> --all --raw` immediately before selecting an ID. Do not reuse IDs across connections. All live tests use process-lifetime configuration and return to the captured starting mode.
+
 ## By hand
+
+See [the current production review](docs/production-readiness.md) for checks actually completed and remaining release gates. Apple silicon is the primary test target; `UNIVERSAL=1` is optional compatibility packaging.
 
 The automated tests can't see the screen, so these checks need a person, and some need an external display. Run them after `make install`, with RDM quit and removed from Login Items.
 
@@ -36,6 +47,9 @@ The automated tests can't see the screen, so these checks need a person, and som
 - [ ] A display that drops off during the countdown and reconnects comes back in its previous mode, with no alert while it is away. The app waits up to two minutes for it; `resolute set` says it is waiting and gives up after 30 seconds.
 - [ ] `resolute modes --all --raw` lists the hidden modes. `resolute set --mode-id <id> --allow-hidden` asks in the terminal: `y` keeps the mode; anything else, Ctrl-C or 15 seconds reverts it.
 - [ ] After Keep, log out and back in. Note whether the hidden mode is still in use: macOS saves modes by size and refresh rate, and may not bring back one it does not list.
+- [ ] Quit during a trial leaves recovery running; Quit with a pending restore offers Keep Waiting first. Keep after the deadline reverts.
+- [ ] A display reconnected with changed display/mode IDs restores only a uniquely identified matching display and mode. Another monitor reusing an ID is not changed.
+- [ ] A hidden switch without an interactive terminal fails before mutation. Partial terminal input, Ctrl-C, terminal close and SIGTERM do not leave an unconfirmed trial running indefinitely.
 
 ### Custom resolutions (an external display; Apple silicon may ignore scaled ones)
 

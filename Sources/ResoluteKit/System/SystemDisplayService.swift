@@ -33,7 +33,8 @@ public struct SystemDisplayService: DisplayControlling {
     }
 
     public func currentModeID(of displayID: CGDirectDisplayID) -> Int32? {
-        CGDisplayCopyDisplayMode(displayID)?.ioDisplayModeID
+        guard Self.isOnline(displayID) else { return nil }
+        return CGDisplayCopyDisplayMode(displayID)?.ioDisplayModeID
     }
 
     public func apply(modeID: Int32, to displayID: CGDirectDisplayID, scope: ConfigurationScope) throws {

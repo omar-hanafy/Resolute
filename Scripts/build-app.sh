@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds dist/Resolute.app and dist/resolute as universal binaries.
-#   UNIVERSAL=0 Scripts/build-app.sh    # this Mac's architecture only (faster)
+# Builds dist/Resolute.app and dist/resolute for Apple silicon.
+#   UNIVERSAL=1 Scripts/build-app.sh    # optional Apple silicon + Intel compatibility
 #   SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" Scripts/build-app.sh
 # SIGN_IDENTITY defaults to "-" (ad hoc, local use only). A real identity also turns on
 # the hardened runtime and, only for a "Developer ID Application" identity, an Apple
@@ -10,8 +10,12 @@ cd "$(dirname "$0")/.."
 
 VERSION="$(sed -n 's/.*static let string = "\(.*\)".*/\1/p' Sources/ResoluteKit/Version.swift)"
 BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
-ARCHS=(--arch arm64 --arch x86_64)
-[[ "${UNIVERSAL:-1}" == "0" ]] && ARCHS=()
+ARCHS=(--arch arm64)
+case "${UNIVERSAL:-0}" in
+  0) ;;
+  1) ARCHS+=(--arch x86_64) ;;
+  *) echo "UNIVERSAL must be 0 (Apple silicon) or 1 (universal)." >&2; exit 1 ;;
+esac
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 
 swift build -c release ${ARCHS[@]+"${ARCHS[@]}"}
@@ -23,6 +27,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources"
 cp "$BIN/ResoluteApp" "$APP/Contents/MacOS/Resolute"
 cp "$BIN/resolute" "$APP/Contents/Helpers/resolute"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cp LICENSE "$APP/Contents/Resources/LICENSE.txt"
+mkdir -p "$APP/Contents/Resources/ThirdPartyLicenses"
+cp .build/checkouts/swift-argument-parser/LICENSE.txt "$APP/Contents/Resources/ThirdPartyLicenses/swift-argument-parser.txt"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" Resources/Info.plist > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 

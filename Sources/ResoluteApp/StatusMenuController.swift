@@ -67,6 +67,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     private func perform(_ action: MenuAction) {
+        // About, login-item failures and editor dialogs can open a nested modal session
+        // that prevents the countdown from reverting on time. Mirroring also changes
+        // the topology the trial must restore.
+        guard !modeChanges.isChangingMode else { return }
         switch action {
         case .applyMode(let displayID, let modeID, let needsConfirmation):
             modeChanges.apply(modeID: modeID, to: displayID, needsConfirmation: needsConfirmation)

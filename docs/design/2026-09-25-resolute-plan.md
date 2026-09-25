@@ -1,5 +1,7 @@
 # Resolute Implementation Plan
 
+> **Historical implementation plan — not current instructions.** This document records the initial design and copied implementation sketches. Its version numbers, scripts, universal-build defaults, API details and validation expectations may differ from the current repository. Do not run its code blocks as maintenance or release instructions. Use the [README](../../README.md), [contributor guide](../../CONTRIBUTING.md), [testing checklist](../../TESTING.md) and [release-candidate validation record](../production-readiness.md), together with the actual source and scripts, for current behavior.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build Resolute, a menu-bar display-mode switcher and CLI for macOS 14+ (verified on macOS 27) that replaces the abandoned RDM, and publish it privately under `omar-hanafy`.

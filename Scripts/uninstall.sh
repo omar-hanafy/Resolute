@@ -25,7 +25,7 @@ if [[ -d "$APP_PATH" ]]; then
 fi
 
 rm -rf "$APP_PATH"
-if [[ -L "$BIN_DIR/resolute" && "$(readlink "$BIN_DIR/resolute")" == *"Resolute.app/Contents/Helpers/resolute" ]]; then
+if [[ -L "$BIN_DIR/resolute" && "$(readlink "$BIN_DIR/resolute")" == "$APP_PATH/Contents/Helpers/resolute" ]]; then
   rm -f "$BIN_DIR/resolute" 2>/dev/null || echo "Remove the command-line link with: sudo rm \"$BIN_DIR/resolute\""
 fi
 defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true

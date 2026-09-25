@@ -39,7 +39,7 @@ struct SetCommand: ParsableCommand, ContextCommand {
 
     @Flag(help: ArgumentHelp(
         "Allow hidden modes that macOS does not list.",
-        discussion: "A hidden mode is tried until you log out. In a terminal you then have 15 seconds to type y to keep it; otherwise the previous mode comes back."
+        discussion: "A hidden mode requires an interactive terminal. You have 15 seconds to type y to keep it; otherwise the previous mode comes back."
     ))
     var allowHidden = false
 
@@ -115,6 +115,9 @@ struct SetCommand: ParsableCommand, ContextCommand {
             context.write("Would switch \(display.name) to \(Output.describe(mode)).")
             return
         }
+        guard mode.origin != .hidden || context.canConfirmHiddenMode else {
+            throw ResoluteError.usage("A hidden mode requires an interactive terminal for its Keep/Revert confirmation. No display settings changed.")
+        }
         // Hidden modes are tried for the session and kept only when confirmed; --session
         // only limits how long a confirmed mode lasts.
         let trial = session || mode.origin == .hidden
@@ -168,7 +171,10 @@ struct SetCommand: ParsableCommand, ContextCommand {
     static func finishRestore(
         _ pending: ModeSwitcher.PendingRestore, with switcher: ModeSwitcher, on display: Display, in context: CommandContext
     ) throws {
-        context.writeError("\(pending.displayName) went away. Waiting for it to come back to restore the previous mode…")
+        let waitingMessage = pending.resolveDisplay(in: context.service.displays()) != nil
+            ? "\(pending.displayName) could not restore the previous mode yet. Waiting for it to accept the change…"
+            : "\(pending.displayName) went away. Waiting for it to come back to restore the previous mode…"
+        context.writeError(waitingMessage)
         let deadline = ContinuousClock.now + .seconds(context.restoreTimeout)
         var progress = ModeSwitcher.RestoreProgress.waiting
         // The failure from the last try, while the display is back; one that went away again
@@ -200,14 +206,21 @@ struct SetCommand: ParsableCommand, ContextCommand {
                 throw ResoluteError.cancelled
             }
         }
+        let returned = pending.resolveDisplay(in: context.service.displays())
         func describe(_ modeID: Int32) -> String {
-            display.modes.first { $0.modeID == modeID }.map(Output.describe) ?? "mode \(modeID)"
+            (returned ?? display).modes.first { $0.modeID == modeID }.map(Output.describe) ?? "mode \(modeID)"
+        }
+        func isPrevious(_ modeID: Int32) -> Bool {
+            if let fingerprint = pending.previousMode, let mode = returned?.modes.first(where: { $0.modeID == modeID }) {
+                return fingerprint == ModeSwitcher.ModeFingerprint(mode)
+            }
+            return modeID == pending.modeID
         }
         switch progress {
         case .restored(let modeID):
-            let which = modeID == pending.modeID ? "the previous mode" : "its default mode"
+            let which = isPrevious(modeID) ? "the previous mode" : "its default mode"
             context.write("\(pending.displayName) is back. Restored \(which): \(describe(modeID)).")
-        case .leftAlone(let current) where current == pending.modeID:
+        case .leftAlone(let current) where isPrevious(current):
             context.write("\(pending.displayName) is back with the previous mode: \(describe(current)).")
         case .leftAlone(let current):
             context.write("\(pending.displayName) is back with \(describe(current)), so it was left as it is.")
@@ -219,29 +232,54 @@ struct SetCommand: ParsableCommand, ContextCommand {
         if let failure = pending.failure { throw failure }
     }
 
-    /// The command that puts `pending`'s mode back for the session, as the revert would have.
+    /// Numeric display and mode IDs may change on reconnect. Do not hand out a stale
+    /// command that could now select another display or mode.
     static func wayBack(_ pending: ModeSwitcher.PendingRestore, on display: Display) -> String {
-        let isHidden = display.modes.first { $0.modeID == pending.modeID }?.origin == .hidden
-        return "To put the previous mode back later: resolute set --mode-id \(pending.modeID) -d id:\(pending.displayID) --session"
-            + (isHidden ? " --allow-hidden" : "")
+        let previous = display.modes.first { $0.modeID == pending.modeID }
+        let size = previous.map {
+            let rate = RefreshRate.format($0.refreshRate)
+            return $0.sizeText + (rate.isEmpty ? " (refresh unknown)" : " @ \(rate)")
+        } ?? "the previous mode"
+        return "To restore \(pending.displayName) to \(size), reconnect it and run resolute displays, then resolute modes -d <current-display>. "
+            + "Use the current display and mode IDs with resolute set --mode-id <current-mode> -d <current-display> --session. "
+            + "Do not reuse IDs from before the reconnect; add --all and --allow-hidden if the previous mode was hidden."
     }
 
-    /// Asks in the terminal whether to keep a hidden mode. Without a terminal the mode
-    /// stays until the user logs out.
+    /// Reads a complete answer within one deadline. Reading bytes from the polled file
+    /// descriptor avoids readLine() blocking past the deadline after partial input.
     static func askToKeep(
         seconds: Int = 15, input: Int32 = STDIN_FILENO, isTerminal: Bool? = nil, interrupts: Interrupts = .process
     ) -> ModeSwitcher.Decision {
         guard isTerminal ?? (isatty(input) != 0) else {
-            FileHandle.standardError.write(Data("note: no terminal to confirm in, so this mode lasts until you log out.\n".utf8))
-            return .keepForSession
+            return .revert
         }
+        // A terminal signal can flush input between poll and read. Nonblocking reads
+        // keep that race inside the same deadline instead of waiting for another line.
+        let originalFlags = fcntl(input, F_GETFL)
+        guard originalFlags >= 0, fcntl(input, F_SETFL, originalFlags | O_NONBLOCK) == 0 else { return .revert }
+        defer { _ = fcntl(input, F_SETFL, originalFlags) }
         let prompt = "Keep this display mode? Type y and press Return within \(seconds) seconds; anything else reverts: "
         FileHandle.standardOutput.write(Data(prompt.utf8))
         // Ctrl-C is "no": the trial must be undone, which ending the process would not do.
-        guard interrupts.wait(TimeInterval(seconds), orFor: input) == .input, let answer = readLine() else {
-            print("")
-            return .revert
+        let deadline = ContinuousClock.now + .seconds(seconds)
+        var bytes: [UInt8] = []
+        while ContinuousClock.now < deadline {
+            let left = (deadline - ContinuousClock.now).components
+            let remaining = Double(left.seconds) + Double(left.attoseconds) / 1e18
+            guard interrupts.wait(remaining, orFor: input) == .input else { break }
+            var byte: UInt8 = 0
+            let count = read(input, &byte, 1)
+            if count < 0, errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
+            guard count == 1 else { break }
+            if byte == 10 || byte == 13 {
+                guard ContinuousClock.now < deadline else { break }
+                let answer = String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespaces).lowercased()
+                return answer == "y" || answer == "yes" ? .keep : .revert
+            }
+            guard bytes.count < 128 else { break }
+            bytes.append(byte)
         }
-        return answer.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("y") ? .keep : .revert
+        print("")
+        return .revert
     }
 }

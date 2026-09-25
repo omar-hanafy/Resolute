@@ -9,7 +9,9 @@ import Testing
 @Suite struct RestoreWaitTests {
     let arguments = ["set", "--mode-id", "90", "--allow-hidden", "-d", "dell"]
     let waiting = "DELL P2419H went away. Waiting for it to come back to restore the previous mode…"
-    let wayBack = "To put the previous mode back later: resolute set --mode-id 1 -d id:2 --session"
+    let wayBack = "To restore DELL P2419H to 1920 × 1080 @ 60 Hz, reconnect it and run resolute displays, then resolute modes -d <current-display>. "
+        + "Use the current display and mode IDs with resolute set --mode-id <current-mode> -d <current-display> --session. "
+        + "Do not reuse IDs from before the reconnect; add --all and --allow-hidden if the previous mode was hidden."
 
     /// Runs `arguments` as the command line would against `service`, answering the prompt
     /// with `answer` and waiting at most a fifth of a second for a display to come back.
@@ -38,6 +40,32 @@ import Testing
         let service = ReconnectingDisplays(base, displayID: 2)
         setUp(service)
         return (base, service)
+    }
+
+    @Test func describesThePreviousModeAfterReconnectRenumbersModes() throws {
+        let original = Sample.monitor
+        var returned = original
+        returned.modes = original.modes.map { mode in
+            var renumbered = mode
+            renumbered.modeID += 100
+            return renumbered
+        }
+        returned.currentModeID = 190
+        let previous = try #require(original.currentMode)
+        let trial = try #require(original.modes.first { $0.modeID == 90 })
+        let pending = ModeSwitcher.PendingRestore(
+            displayID: original.id, displayName: original.name, modeID: previous.modeID,
+            fallbackModeID: previous.modeID, trialModeID: trial.modeID,
+            displayIdentity: .init(original), previousMode: .init(previous),
+            fallbackMode: .init(previous), trialMode: .init(trial)
+        )
+        let service = FakeDisplays([returned])
+        let transcript = Transcript()
+        let context = transcript.context(service: service, isRoot: false, decision: .revert)
+        try SetCommand.finishRestore(pending, with: ModeSwitcher(service: service), on: original, in: context)
+        #expect(transcript.output == "DELL P2419H is back. Restored the previous mode: 1920 × 1080 @ 60 Hz, mode 101.")
+        #expect(service.changes.last?.modeID == 101)
+        #expect(!transcript.errors.contains("went away"))
     }
 
     @Test func waitsForTheDisplayAndPutsThePreviousModeBack() async {
@@ -185,16 +213,16 @@ import Testing
         #expect(base.changes == [.init(displayID: 2, modeID: 90, scope: .session)])
     }
 
-    /// --session keeps a confirmed mode without saving it, so there is nothing to fail,
-    /// but the mode can no longer be checked.
+    /// A session-only Keep still needs a connected display to verify the trial.
     @Test func saysWhenADisplayKeptForTheSessionWentAway() async {
         let (base, service) = monitor()
         let result = await run(arguments + ["--session"], on: service) {
             service.disconnect()
             return .keep
         }
-        #expect(result.code == 0)
-        #expect(result.transcript.errors == "warning: DELL P2419H went away, so its new mode could not be checked.")
+        #expect(result.code == 1)
+        #expect(result.message?.contains("went away") == true)
+        #expect(result.transcript.output.isEmpty)
         #expect(base.changes == [.init(displayID: 2, modeID: 90, scope: .session)])
     }
 
@@ -349,6 +377,43 @@ final class ReconnectingDisplays: DisplayControlling, @unchecked Sendable {
 /// Ctrl-C while a hidden mode is on trial is caught, since ending the process would leave
 /// the mode until logout.
 @Suite(.serialized) struct ControlCTests {
+    @Test(arguments: [("y\n", true), (" YES \n", true), ("yikes\n", false), ("\n", false)])
+    func readsOnlyAnExplicitAnswerFromThePolledDescriptor(answer: String, keeps: Bool) throws {
+        var ends: [Int32] = [-1, -1]
+        try #require(pipe(&ends) == 0)
+        defer { ends.forEach { close($0) } }
+        let bytes = Array(answer.utf8)
+        #expect(bytes.withUnsafeBytes { write(ends[1], $0.baseAddress, $0.count) } == bytes.count)
+        let originalFlags = fcntl(ends[0], F_GETFL)
+        let result = SetCommand.askToKeep(seconds: 1, input: ends[0], isTerminal: true, interrupts: Interrupts())
+        #expect(result == (keeps ? .keep : .revert))
+        #expect(fcntl(ends[0], F_GETFL) == originalFlags)
+    }
+
+    @Test func partialInputCannotBlockTheRevertDeadline() throws {
+        var ends: [Int32] = [-1, -1]
+        try #require(pipe(&ends) == 0)
+        defer { ends.forEach { close($0) } }
+        var byte = UInt8(ascii: "y")
+        #expect(write(ends[1], &byte, 1) == 1)
+        let start = ContinuousClock.now
+        let answer = SetCommand.askToKeep(seconds: 1, input: ends[0], isTerminal: true, interrupts: Interrupts())
+        #expect(answer == .revert)
+        #expect(ContinuousClock.now - start < .seconds(2))
+    }
+
+    @Test func noTerminalNeverKeepsATrial() {
+        #expect(SetCommand.askToKeep(isTerminal: false) == .revert)
+    }
+
+    @Test(arguments: [SIGTERM, SIGHUP]) func terminationSignalsReachRecovery(number: Int32) {
+        let event = Interrupts.process.catchingControlC {
+            kill(getpid(), number)
+            return Interrupts.process.wait(2)
+        }
+        #expect(event == .interrupted)
+    }
+
     /// The prompt takes Ctrl-C for "no", at once, so the trial is undone.
     @Test func answersThePromptWithRevert() async throws {
         var ends: [Int32] = [-1, -1]

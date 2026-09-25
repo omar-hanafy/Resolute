@@ -67,6 +67,12 @@ final class ReconnectingDisplays: DisplayControlling, @unchecked Sendable {
         }
     }
 
+    func replaceMonitor(serialNumber: UInt32) {
+        lock.withLock {
+            list[1].serialNumber = serialNumber
+        }
+    }
+
     /// Makes the monitor drop off as soon as it switches to `modeID`.
     func dropMonitor(whenSwitchedTo modeID: Int32) {
         lock.withLock { dropsOnSwitchTo = modeID }
@@ -129,7 +135,16 @@ final class TestClock {
     let clock = TestClock()
     let coordinator: ModeChangeCoordinator
     /// Mode 1 was in use on the monitor before the trial of mode 90; it is also the default.
-    let pending = ModeSwitcher.PendingRestore(displayID: 2, displayName: "DELL P2419H", modeID: 1, fallbackModeID: nil, trialModeID: 90)
+    var pending: ModeSwitcher.PendingRestore { expectedRestore(trialModeID: 90) }
+
+    func expectedRestore(trialModeID: Int32) -> ModeSwitcher.PendingRestore {
+        ModeSwitcher.PendingRestore(
+            displayID: 2, displayName: "DELL P2419H", modeID: 1, fallbackModeID: nil, trialModeID: trialModeID,
+            displayIdentity: ModeSwitcher.DisplayIdentity(Display(id: 2, name: "DELL P2419H", currentModeID: 1, modes: [])),
+            previousMode: ModeSwitcher.ModeFingerprint(ReconnectingDisplays.mode(1, flags: 0x7)),
+            trialMode: ModeSwitcher.ModeFingerprint(ReconnectingDisplays.mode(trialModeID))
+        )
+    }
 
     init() {
         let (countdown, reports, clock) = (countdown, reports, clock)
@@ -280,6 +295,21 @@ final class TestClock {
         #expect(displays.changes.last == Change(displayID: 2, modeID: 1, scope: .session))
     }
 
+    @Test func retriesAnImmediatelyRefusedRevertWithoutAReconnect() async throws {
+        let coordinator = ModeChangeCoordinator(
+            service: displays, decide: { .revert }, report: { _ in }, retryInterval: .milliseconds(10)
+        )
+        displays.refused = [1]
+        coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
+        #expect(coordinator.pendingRestores == [pending])
+        displays.refused = []
+        for _ in 0..<100 where !coordinator.pendingRestores.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(coordinator.pendingRestores.isEmpty)
+        #expect(displays.changes.last == Change(displayID: 2, modeID: 1, scope: .session))
+    }
+
     /// Choosing the mode on trial again, while its display refuses the previous one, is
     /// no answer to the countdown: the revert keeps waiting.
     @Test func keepsAWaitingRestoreWhenTheModeOnTrialIsChosenAgain() {
@@ -342,8 +372,25 @@ final class TestClock {
         displays.comeBack(2)
         tryModeThatMakesTheMonitorGoAway(modeID: 3)
         #expect(coordinator.pendingRestores == [
-            ModeSwitcher.PendingRestore(displayID: 2, displayName: "DELL P2419H", modeID: 1, fallbackModeID: nil, trialModeID: 3),
+            expectedRestore(trialModeID: 3),
         ])
+    }
+
+    @Test func doesNotMergeRecoveryForAReplacementDisplayWithTheSameID() throws {
+        tryModeThatMakesTheMonitorGoAway()
+        displays.replaceMonitor(serialNumber: 1234)
+        displays.comeBack(2, showing: 3)
+        let replacement = try #require(displays.displays().first { $0.id == 2 })
+        tryModeThatMakesTheMonitorGoAway()
+        let restore = try #require(coordinator.pendingRestores.first)
+        #expect(restore.displayIdentity == ModeSwitcher.DisplayIdentity(replacement))
+        #expect(restore.modeID == 3)
+        #expect(restore.previousMode == ModeSwitcher.ModeFingerprint(ReconnectingDisplays.mode(3)))
+
+        displays.comeBack(2)
+        coordinator.displaysDidChange()
+        #expect(coordinator.pendingRestores.isEmpty)
+        #expect(displays.changes.last == Change(displayID: 2, modeID: 3, scope: .session))
     }
 
     /// A mode chosen while a countdown is up is ignored, with the revert waiting for its
@@ -356,11 +403,13 @@ final class TestClock {
         var seenDuringCountdown: [ResoluteError]?
         let (coordinator, reports) = (coordinator, reports)
         countdown.answers.append {
+            #expect(coordinator.isChangingMode)
             coordinator.apply(modeID: 3, to: 2, needsConfirmation: false)
             seenDuringCountdown = reports.errors
             return .revert
         }
         coordinator.apply(modeID: 91, to: 1, needsConfirmation: true)
+        #expect(!coordinator.isChangingMode)
         #expect(seenDuringCountdown == [])
         #expect(!displays.changes.contains(Change(displayID: 2, modeID: 1, scope: .session)))
         #expect(!displays.changes.contains(Change(displayID: 2, modeID: 3, scope: .permanent)))

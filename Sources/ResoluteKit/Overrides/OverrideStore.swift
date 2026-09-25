@@ -132,6 +132,7 @@ public struct OverrideStore: Sendable {
     /// Backups of `key`'s override, newest first.
     public func backups(for key: OverrideKey) -> [OverrideBackup] {
         let folder = locations.backupFolder(for: key)
+        guard Self.hasUnlinkedParents(folder) else { return [] }
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false))) ?? []
         return names.compactMap { name -> OverrideBackup? in
             let file = folder.appending(path: name, directoryHint: .notDirectory)
@@ -167,14 +168,15 @@ public struct OverrideStore: Sendable {
     /// Resolute can read one. Throws when the backup is gone, or holds no property list
     /// macOS could read: a dictionary, or a list of them.
     public func restorableContents(of backup: OverrideBackup) throws -> BackupContents {
-        guard let data = try contents(of: backup.file) else {
+        try validate(backup)
+        guard let data = try regularContents(of: backup.file) else {
             throw ResoluteError.overrideUnreadable(path: backup.file.path(percentEncoded: false), reason: "it no longer exists")
         }
         do {
             return BackupContents(data: data, override: try parse(data, key: backup.key, at: backup.file), problem: nil)
         } catch ResoluteError.overrideUnreadable(let path, let reason) {
             let list = try? PropertyListSerialization.propertyList(from: data, format: nil)
-            guard list is [String: Any] || list is [Any] else {
+            guard list is [String: Any] || ((list as? [[String: Any]])?.isEmpty == false) else {
                 throw ResoluteError.overrideUnreadable(path: path, reason: reason)
             }
             return BackupContents(data: data, override: nil, problem: reason)
@@ -183,10 +185,50 @@ public struct OverrideStore: Sendable {
 
     /// A backup's bytes, and the override they hold; throws when they are not one.
     public func contents(of backup: OverrideBackup) throws -> (override: DisplayOverride, data: Data) {
-        guard let data = try contents(of: backup.file) else {
+        try validate(backup)
+        guard let data = try regularContents(of: backup.file) else {
             throw ResoluteError.overrideUnreadable(path: backup.file.path(percentEncoded: false), reason: "it no longer exists")
         }
         return (try parse(data, key: backup.key, at: backup.file), data)
+    }
+
+    private func validate(_ backup: OverrideBackup) throws {
+        guard locations.contains(backup), Self.hasUnlinkedParents(backup.file.deletingLastPathComponent()) else {
+            throw ResoluteError.overrideUnreadable(path: backup.file.path(percentEncoded: false), reason: "it is not a regular backup in the backup folder")
+        }
+    }
+
+    /// Check each parent rather than resolving links, which would accept a redirected
+    /// vendor folder. /var and /tmp are macOS's own aliases used by staged locations.
+    private static func hasUnlinkedParents(_ folder: URL) -> Bool {
+        var current = folder.standardizedFileURL
+        while current.path != "/" {
+            if current.path != "/var" && current.path != "/tmp" {
+                var info = stat()
+                if lstat(current.path, &info) == 0, info.st_mode & S_IFMT != S_IFDIR { return false }
+            }
+            current.deleteLastPathComponent()
+        }
+        return true
+    }
+
+    /// Open without following the final link or blocking on a FIFO, then inspect the
+    /// descriptor used for the read so a replaced directory entry cannot bypass it.
+    private func regularContents(of url: URL, followingLinks: Bool = false) throws -> Data? {
+        let path = url.path(percentEncoded: false)
+        let descriptor = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | (followingLinks ? 0 : O_NOFOLLOW))
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return nil }
+            let reason = errno == EACCES ? "you don’t have permission to read it" : "it is not a readable regular file"
+            throw ResoluteError.overrideUnreadable(path: path, reason: reason)
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1 else {
+            throw ResoluteError.overrideUnreadable(path: path, reason: "it is not a regular file with a single link")
+        }
+        return try handle.readToEnd() ?? Data()
     }
 
     // MARK: - Reading
@@ -204,7 +246,9 @@ public struct OverrideStore: Sendable {
             throw ResoluteError.overrideUnreadable(path: path, reason: "it is a folder, not a file")
         }
         do {
-            return try Data(contentsOf: url)
+            return try regularContents(of: url, followingLinks: true)
+        } catch let error as ResoluteError {
+            throw error
         } catch {
             throw ResoluteError.overrideUnreadable(path: path, reason: Self.readFailure(error))
         }
@@ -283,6 +327,13 @@ public struct OverrideBackup: Hashable, Sendable, Identifiable {
 }
 
 extension OverrideLocations {
+    /// Check the complete identity, not just the number of path components.
+    func contains(_ backup: OverrideBackup) -> Bool {
+        guard backup.file.isFileURL, OverrideBackup(key: backup.key, file: backup.file) != nil else { return false }
+        return backup.file.standardizedFileURL.deletingLastPathComponent()
+            == backupFolder(for: backup.key).standardizedFileURL
+    }
+
     /// Where backups of `key`'s override go.
     public func backupFolder(for key: OverrideKey) -> URL {
         backupRoot.appending(path: key.vendorDirectoryName, directoryHint: .isDirectory)

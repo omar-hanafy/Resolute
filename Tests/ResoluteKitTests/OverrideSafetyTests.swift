@@ -93,9 +93,8 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: url.path(percentEncoded: false)))
     }
 
-    /// An override kept elsewhere and linked into place reads through the link, and so
-    /// does the check; the link is replaced by the new file, as before.
-    @Test func replacesALinkedOverrideThatDidNotChange() async throws {
+    /// A privileged backup must never read through a user-controlled link.
+    @Test func refusesALinkedOverrideEvenWhenItsBytesDidNotChange() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let installer = installer(at: root)
@@ -105,13 +104,15 @@ import Testing
         let url = installer.locations.userFile(for: key)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: url, withDestinationURL: kept)
-        try await installer.install(override(2560), expecting: try store.installedState(for: key))
-        #expect(try store.installedOverride(for: key)?.resolutions == override(2560).resolutions)
+        await #expect(throws: ResoluteError.self) {
+            try await installer.install(override(2560), expecting: try store.installedState(for: key))
+        }
+        #expect(try Data(contentsOf: kept) == override(1920).propertyListData())
+        #expect(backupCount(installer) == 0)
     }
 
-    /// A link to a file that is gone is no override, to macOS and to Resolute: an edit that
-    /// read it as absent replaces the link itself, and never creates the file it points to.
-    @Test func replacesALinkToAFileThatIsGone() async throws {
+    /// Dangling links are refused too, before either the override or backup is changed.
+    @Test func refusesALinkToAFileThatIsGone() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let installer = installer(at: root)
@@ -123,9 +124,8 @@ import Testing
         let read = try store.installedState(for: key)
         #expect(read == .absent)
 
-        try await installer.install(override(2560), expecting: read)
-        #expect(try store.installedOverride(for: key)?.resolutions == override(2560).resolutions)
-        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: url.path(percentEncoded: false))) == nil)
+        await #expect(throws: ResoluteError.self) { try await installer.install(override(2560), expecting: read) }
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: url.path(percentEncoded: false))) != nil)
         #expect(!FileManager.default.fileExists(atPath: gone.path(percentEncoded: false)))
         #expect(backupCount(installer) == 0)
     }
@@ -394,5 +394,139 @@ extension DisplayOverride {
     /// This override as reading its file back gives it.
     func readBack() throws -> DisplayOverride {
         try DisplayOverride(key: key, propertyList: propertyListData())
+    }
+}
+
+@Suite struct OverridePathSafetyTests {
+    let key = OverrideKey(vendorID: 0xDB4, productID: 0x3401)
+
+    @Test(arguments: ["Overrides", "Overrides/DisplayVendorID-db4", "Backups", "Backups/DisplayVendorID-db4"])
+    func refusesRedirectedDirectories(_ redirected: String) async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let locations = OverrideLocations.staged(at: root)
+        let installer = OverrideInstaller(locations: locations, runner: ShellCommandRunner())
+        let original = DisplayOverride(key: key, productName: "Original")
+        // Backup redirection needs an existing override to trigger a copy.
+        if redirected.hasPrefix("Backups") { try await installer.install(original) }
+        let outside = root.appending(path: "Outside")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let link = root.appending(path: redirected)
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        await #expect(throws: ResoluteError.self) {
+            try await installer.install(DisplayOverride(key: key, productName: "Changed"))
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
+        if redirected.hasPrefix("Backups") {
+            #expect(try Data(contentsOf: locations.userFile(for: key)) == original.propertyListData())
+        }
+    }
+
+    @Test func refusesDirectoryDestinationsAndHardLinkedFiles() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = OverrideInstaller(locations: .staged(at: root), runner: ShellCommandRunner())
+        let destination = installer.locations.userFile(for: key)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        await #expect(throws: ResoluteError.self) { try await installer.install(DisplayOverride(key: key)) }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: destination.path).isEmpty)
+        try FileManager.default.removeItem(at: destination)
+        let outside = root.appending(path: "outside")
+        let bytes = Data("untouched".utf8)
+        try bytes.write(to: outside)
+        try FileManager.default.linkItem(at: outside, to: destination)
+        await #expect(throws: ResoluteError.self) { try await installer.remove(key) }
+        #expect(try Data(contentsOf: outside) == bytes)
+        #expect(try Data(contentsOf: destination) == bytes)
+    }
+
+    @Test func refusesForgedBackupIdentityAndRedirectedPruning() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let locations = OverrideLocations.staged(at: root)
+        let installer = OverrideInstaller(locations: locations, runner: ShellCommandRunner())
+        let folder = locations.backupFolder(for: key)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let unrelated = folder.appending(path: "not-a-backup")
+        try Data("keep".utf8).write(to: unrelated)
+        var backup = OverrideBackup(key: key, file: unrelated, date: Date(), sequence: 1)
+        await #expect(throws: ResoluteError.self) { try await installer.removeBackups([backup]) }
+        #expect(try Data(contentsOf: unrelated) == Data("keep".utf8))
+        try FileManager.default.removeItem(at: folder)
+        let outside = root.appending(path: "outside")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let name = "\(key.productFileName)-20260921-141320.plist"
+        let victim = outside.appending(path: name)
+        try DisplayOverride(key: key).propertyListData().write(to: victim)
+        try FileManager.default.createSymbolicLink(at: folder, withDestinationURL: outside)
+        backup.file = folder.appending(path: name)
+        await #expect(throws: ResoluteError.self) { try await installer.removeBackups([backup]) }
+        let store = OverrideStore(locations: locations)
+        #expect(store.backups(for: key).isEmpty)
+        #expect(throws: ResoluteError.self) { try store.restorableContents(of: backup) }
+        #expect(FileManager.default.fileExists(atPath: victim.path))
+    }
+
+    @Test(arguments: [0, 1, 2])
+    func refusesInvalidRestoreArrays(_ kind: Int) throws {
+        let values: [Any] = kind == 0 ? [] : kind == 1 ? ["not an override"] : [123]
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let locations = OverrideLocations.staged(at: root)
+        let file = locations.backupFolder(for: key).appending(path: "\(key.productFileName)-20260921-141320.plist")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: values, format: .xml, options: 0).write(to: file)
+        let backup = try #require(OverrideBackup(key: key, file: file))
+        #expect(throws: ResoluteError.self) { try OverrideStore(locations: locations).restorableContents(of: backup) }
+    }
+
+    @Test func refusesBackupReplacedBySymlinkAfterListing() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let locations = OverrideLocations.staged(at: root)
+        let file = locations.backupFolder(for: key).appending(path: "\(key.productFileName)-20260921-141320.plist")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try DisplayOverride(key: key).propertyListData().write(to: file)
+        let store = OverrideStore(locations: locations)
+        let backup = try #require(store.backups(for: key).first)
+        let outside = root.appending(path: "outside")
+        try FileManager.default.moveItem(at: file, to: outside)
+        try FileManager.default.createSymbolicLink(at: file, withDestinationURL: outside)
+        #expect(throws: ResoluteError.self) { try store.restorableContents(of: backup) }
+    }
+
+    @Test func refusesUserOwnedPathsWhenTheWriterIsPrivileged() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Exercise the privileged policy without elevating this process or writing to
+        // system locations: a root writer may not trust this user's directory.
+        let script = "set -e; " + OverrideInstaller.pathSafetyFunctions
+            + "; safe_uid=0; safe_directory " + Shell.quote(root.resolvingSymlinksInPath().appending(path: "nested").path)
+        await #expect(throws: ResoluteError.self) { try await ShellCommandRunner().run(script) }
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "nested").path))
+    }
+
+    @Test func refusesSpecialFilesWithoutBlocking() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let locations = OverrideLocations.staged(at: root)
+        let destination = locations.userFile(for: key)
+        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        #expect(mkfifo(destination.path, 0o600) == 0)
+        #expect(throws: ResoluteError.self) { try OverrideStore(locations: locations).installedState(for: key) }
+    }
+
+    @Test func refusesRedirectedLockParents() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outside = root.appending(path: "outside")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let linked = root.appending(path: "linked")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: outside)
+        await #expect(throws: ResoluteError.self) {
+            try await OverrideLock(file: linked.appending(path: "nested/overrides.lock")).withLock {}
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
     }
 }
