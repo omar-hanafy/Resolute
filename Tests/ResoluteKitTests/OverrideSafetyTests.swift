@@ -93,6 +93,22 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: url.path(percentEncoded: false)))
     }
 
+    /// An override kept elsewhere and linked into place reads through the link, and so
+    /// does the check; the link is replaced by the new file, as before.
+    @Test func replacesALinkedOverrideThatDidNotChange() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = installer(at: root)
+        let store = OverrideStore(locations: installer.locations)
+        let kept = root.appending(path: "dotfiles-override.plist")
+        try override(1920).propertyListData().write(to: kept)
+        let url = installer.locations.userFile(for: key)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: url, withDestinationURL: kept)
+        try await installer.install(override(2560), expecting: try store.installedState(for: key))
+        #expect(try store.installedOverride(for: key)?.resolutions == override(2560).resolutions)
+    }
+
     /// The app cannot hold the lock itself (the lock file lives where only root may create
     /// it), so its scripts take the same lock the command line holds.
     @Test func takesTheCommandLinesLockInsideTheScript() async throws {

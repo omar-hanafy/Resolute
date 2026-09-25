@@ -173,7 +173,8 @@ public struct OverrideInstaller: Sendable {
         case .absent?:
             return "if [ -e \(file) ] || [ -L \(file) ]; then \(changed); fi"
         case .contents(let data)?:
-            return "if [ -L \(file) ] || [ ! -f \(file) ] || ! printf '%s' \(Shell.quote(data.base64EncodedString())) "
+            // Through a link, as the file was read: an override may be linked into place.
+            return "if [ ! -f \(file) ] || ! printf '%s' \(Shell.quote(data.base64EncodedString())) "
                 + "| /usr/bin/base64 -D | /usr/bin/cmp -s - \(file); then \(changed); fi"
         }
     }
