@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Source builds handle older ScreenCaptureKit concurrency annotations and avoid a Swift compiler timeout when decoding resolution bytes. Override-lock polling uses its exact deadline, with deterministic timeout and cancellation tests.
 - Hidden-mode trials require an interactive terminal before switching. Partial input cannot suspend the 15-second deadline; only `y` or `yes` keeps the mode. Ctrl-C, terminal closure and termination requests trigger recovery.
 - Keep rejects expired trials and disconnected displays. Keep and Revert preserve a mode chosen elsewhere during the trial, and private rollback verifies the mode actually applied.
 - Failed restores retry for up to two minutes in the app or 30 seconds in the CLI. Recovery validates display identity and mode properties after reconnect so reused IDs cannot target a different monitor or mode.

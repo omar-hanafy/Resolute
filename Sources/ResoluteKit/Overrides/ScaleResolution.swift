@@ -285,9 +285,12 @@ public enum ScaleResolutionCodec {
     /// The big-endian 32-bit words in `data`.
     static func words(_ data: Data) -> [UInt32] {
         let bytes = [UInt8](data)
-        return stride(from: 0, to: bytes.count - bytes.count % 4, by: 4).map { index in
-            UInt32(bytes[index]) << 24 | UInt32(bytes[index + 1]) << 16
-                | UInt32(bytes[index + 2]) << 8 | UInt32(bytes[index + 3])
+        return stride(from: 0, to: bytes.count - bytes.count % 4, by: 4).map { index -> UInt32 in
+            let first: UInt32 = UInt32(bytes[index]) << 24
+            let second: UInt32 = UInt32(bytes[index + 1]) << 16
+            let third: UInt32 = UInt32(bytes[index + 2]) << 8
+            let fourth: UInt32 = UInt32(bytes[index + 3])
+            return first | second | third | fourth
         }
     }
 

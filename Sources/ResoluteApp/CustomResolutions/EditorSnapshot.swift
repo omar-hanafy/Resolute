@@ -1,6 +1,8 @@
 import AppKit
 import ResoluteKit
-import ScreenCaptureKit
+// Xcode 16's ScreenCaptureKit content snapshots lack Sendable annotations. The
+// snapshot is read-only, and capture state stays local to the main-actor operation.
+@preconcurrency import ScreenCaptureKit
 import SwiftUI
 
 /// Renders the Custom Resolutions window to a PNG without showing it to anyone: the

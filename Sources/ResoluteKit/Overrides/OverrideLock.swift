@@ -16,14 +16,21 @@ public struct OverrideLock: Sendable {
     /// Runs `body` while holding the lock. `onWait` is called once when another edit holds
     /// it, so the caller can say what it is waiting for.
     public func withLock<T>(onWait: () -> Void = {}, _ body: () async throws -> T) async throws -> T {
-        let descriptor = try await acquire(onWait: onWait)
+        try await withLock(clock: ContinuousClock(), onWait: onWait, body)
+    }
+
+    /// The clock controls contention polling; path validation and the file lock stay real.
+    func withLock<C: Clock, T>(clock: C, onWait: () -> Void = {}, _ body: () async throws -> T) async throws -> T
+    where C.Duration == Duration {
+        let descriptor = try await acquire(clock: clock, onWait: onWait)
         // Closing the file releases the lock, also if the process dies.
         defer { close(descriptor) }
         return try await body()
     }
 
     /// Opens and locks the file, polling so no thread is held while another edit runs.
-    private func acquire(onWait: () -> Void) async throws -> Int32 {
+    private func acquire<C: Clock>(clock: C, onWait: () -> Void) async throws -> Int32
+    where C.Duration == Duration {
         let path = file.path(percentEncoded: false)
         do {
             try await ShellCommandRunner().run(
@@ -43,7 +50,7 @@ public struct OverrideLock: Sendable {
             close(descriptor)
             throw ResoluteError.lockUnavailable(path: path, reason: "it is not a regular file with a single link")
         }
-        let deadline = ContinuousClock.now + timeout
+        let deadline = clock.now.advanced(by: timeout)
         var hasWaited = false
         while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
             let code = errno
@@ -51,12 +58,12 @@ public struct OverrideLock: Sendable {
                 guard code == EWOULDBLOCK || code == EINTR else {
                     throw ResoluteError.lockUnavailable(path: path, reason: Self.describe(code))
                 }
-                guard ContinuousClock.now < deadline else { throw ResoluteError.overridesBusy }
+                guard clock.now < deadline else { throw ResoluteError.overridesBusy }
                 if !hasWaited {
                     hasWaited = true
                     onWait()
                 }
-                try await Task.sleep(for: .milliseconds(50))
+                try await clock.sleep(until: min(clock.now.advanced(by: .milliseconds(50)), deadline), tolerance: nil)
             } catch {
                 close(descriptor)
                 throw error

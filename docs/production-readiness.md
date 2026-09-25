@@ -19,6 +19,7 @@ Resolute 0.3.0 is an Apple silicon beta / release candidate. This record describ
 | Editor | Keep saves, Add Resolution and discard dialogs associated with the intended display through disconnects, selection changes and external edits. |
 | Privileged overrides | Reject symlinks, hardlinks, special files, redirected parents and writable/ACL-bearing privileged paths. Validate backup identity before restore/prune and read regular files without blocking on FIFOs. |
 | Enumeration | Reject malformed private dimensions and conflicting mode IDs; reject ambiguous exact display names; release CoreDisplay framework handles. |
+| Compiler and test compatibility | Account for older ScreenCaptureKit concurrency annotations, simplify typed resolution-byte decoding, and test lock deadlines/cancellation with a controlled clock while retaining real filesystem locks. |
 | Install and distribution | Stage the new app before replacing the working installation; preserve unrelated CLI files/links. Build arm64 by default, retain `UNIVERSAL=1`, and include project/dependency license texts. Pin CI checkout and verify the downloaded linter checksum. |
 
 ## Verification
@@ -27,7 +28,7 @@ Resolute 0.3.0 is an Apple silicon beta / release candidate. This record describ
 - **5 live tests passed** on the built-in display, including public CoreGraphics switching, private SkyLight switching and the trial/revert path. These briefly changed refresh at the same resolution using application-lifetime scope, then restored the original mode. All 132 private/public mode records remained trusted.
 - The actual Custom Resolutions window was rendered through ScreenCaptureKit and visually inspected; menu diagnostic output also completed. This proves rendering, not every interactive accessibility or hardware scenario.
 - Apple silicon release build and bundle signature checks passed with an **ad hoc** identity. ZIP/DMG packaging, checksums and included release notes were checked locally. These artifacts are not Developer ID signed or notarized.
-- ShellCheck, actionlint 1.7.12, zizmor with `--offline --strict-collection` and `git diff --check` passed. CI definitions now select Apple silicon on macOS 15/Xcode 16, macOS 26/Xcode 26 and the Xcode 27 hosted preview. No hosted CI run was started; the existing private-repository manual-run policy is preserved.
+- ShellCheck, actionlint 1.7.12, zizmor with `--offline --strict-collection` and `git diff --check` passed. CI definitions now select Apple silicon on macOS 15/Xcode 16, macOS 26/Xcode 26 and the Xcode 27 hosted preview. Hosted CI is run manually during preparation while the repository is private; see the [workflow runs](https://github.com/omar-hanafy/Resolute/actions/workflows/ci.yml) for the exact tested revision. The private-repository manual-run policy is preserved.
 
 The hosted runner labels/toolchains were checked against [GitHub's runner inventory](https://github.com/actions/runner-images#available-images), [macOS 15 arm64 image](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md), and [Xcode 27 image](https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md). The exact `xcode-27` label is registered in the linter configuration because its built-in label list predates that hosted preview.
 
@@ -56,8 +57,8 @@ This verifies the current connected state and programmatic mode/revert paths. It
 
 ## Public-repository preparation
 
-- Gitleaks 8.30.1 found no secrets in all 140 reachable commits available before this preparation commit, or in a snapshot of tracked and non-ignored new files. The downloaded scanner was verified against its official release asset SHA-256. A clean scan is not a guarantee that every sensitive value can be detected.
+- Gitleaks 8.30.1 found no secrets in Git history across all reachable refs, or in a snapshot of tracked and non-ignored new files. The downloaded scanner was verified against its official release asset SHA-256. A clean scan is not a guarantee that every sensitive value can be detected.
 - Historical text blobs contained no personal home-directory paths in a targeted scan. The tracked screenshot was reviewed for personal data. Git author attribution remains in history and becomes visible with the repository; history was not rewritten.
 - The source license and bundled dependency license are included. Current build/contribution documentation identifies Apple silicon as the primary target and separates source availability from binary-distribution validation.
 - Keep the release a draft/prerelease until the intended distribution checks are complete. Publishing the source does not require notarization; distributing a notarized app does.
-- Before changing visibility, enable and verify GitHub private vulnerability reporting if available, then document that working channel. It was unavailable while this repository was private. Public issues are for ordinary bugs, not confidential reports.
+- When making the repository public, enable and verify GitHub private vulnerability reporting if available, then document that working channel. It was unavailable while this repository was private. Public issues are for ordinary bugs, not confidential reports.

@@ -262,44 +262,66 @@ actor EventLog {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appending(path: "overrides.lock")
-        let log = EventLog()
-        async let holder: Void = OverrideLock(file: file).withLock {
-            await log.add("held")
-            try? await Task.sleep(for: .milliseconds(800))
-        }
-        await log.waitFor("held")
-        let started = ContinuousClock.now
+        // Hold the real lock until the assertion completes; a delayed runner cannot
+        // release it early or count subprocess startup against the contention timeout.
+        let holder = open(file.path(percentEncoded: false), O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+        try #require(holder >= 0)
+        defer { close(holder) }
+        try #require(flock(holder, LOCK_EX | LOCK_NB) == 0)
+        let clock = AdvancingLockClock()
+        let started = clock.now
+        var waitCount = 0
+        var ran = false
         await #expect(throws: ResoluteError.overridesBusy) {
-            try await OverrideLock(file: file, timeout: .milliseconds(200)).withLock(onWait: { Task { await log.add("waiting") } }) {}
+            try await OverrideLock(file: file, timeout: .milliseconds(225))
+                .withLock(clock: clock, onWait: { waitCount += 1 }) { ran = true }
         }
-        #expect(ContinuousClock.now - started < .milliseconds(600))
-        try await holder
-        try await Task.sleep(for: .milliseconds(20))
-        #expect(await log.events == ["held", "waiting"])
+        #expect(clock.now - started == .milliseconds(225))
+        #expect(waitCount == 1)
+        #expect(!ran)
     }
 
     @Test func stopsWaitingWhenCancelled() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appending(path: "overrides.lock")
-        let log = EventLog()
-        async let holder: Void = OverrideLock(file: file).withLock {
-            await log.add("held")
-            try? await Task.sleep(for: .milliseconds(800))
+        let holder = open(file.path(percentEncoded: false), O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+        try #require(holder >= 0)
+        defer { close(holder) }
+        try #require(flock(holder, LOCK_EX | LOCK_NB) == 0)
+        let clock = AdvancingLockClock()
+        let started = clock.now
+        let waiter = Task {
+            try await OverrideLock(file: file).withLock(clock: clock, onWait: {
+                // Cancel this child at the first confirmed contention, not after an
+                // assumed amount of process startup or scheduler time.
+                withUnsafeCurrentTask { $0?.cancel() }
+            }) { Issue.record("A cancelled waiter must not enter the lock.") }
         }
-        await log.waitFor("held")
-        let waiter = Task { try await OverrideLock(file: file).withLock {} }
-        try await Task.sleep(for: .milliseconds(100))
-        let started = ContinuousClock.now
-        waiter.cancel()
         await #expect(throws: CancellationError.self) { try await waiter.value }
-        #expect(ContinuousClock.now - started < .milliseconds(300))
-        try await holder
+        #expect(clock.now == started)
     }
 
     @Test func sitsBesideTheBackups() {
         #expect(OverrideLocations.standard.lockFile.path(percentEncoded: false)
             == "/Library/Application Support/Resolute/overrides.lock")
+    }
+}
+
+/// Advances only at a requested wakeup, so deadlines do not depend on runner load.
+private final class AdvancingLockClock: Clock, @unchecked Sendable {
+    typealias Instant = ContinuousClock.Instant
+    typealias Duration = Swift.Duration
+    private let lock = NSLock()
+    private var instant = ContinuousClock.now
+
+    var now: Instant { lock.withLock { instant } }
+    var minimumResolution: Duration { .nanoseconds(1) }
+
+    func sleep(until deadline: Instant, tolerance: Duration?) async throws {
+        try Task.checkCancellation()
+        lock.withLock { instant = max(instant, deadline) }
+        await Task.yield()
     }
 }
 
