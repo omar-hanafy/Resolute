@@ -20,7 +20,9 @@ import Testing
         return entries.filter { $0.pathExtension == "sh" }.sorted { $0.path < $1.path }
     }
 
-    static let shellcheckPath = "/opt/homebrew/bin/shellcheck"
+    /// Homebrew's shellcheck on Apple silicon or on Intel.
+    static let shellcheckPath = ["/opt/homebrew/bin/shellcheck", "/usr/local/bin/shellcheck"]
+        .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "/opt/homebrew/bin/shellcheck"
     static var shellcheckInstalled: Bool { FileManager.default.isExecutableFile(atPath: shellcheckPath) }
 
     // MARK: - Process running
@@ -60,7 +62,9 @@ import Testing
         echo "$rc"
         """
         let result = try run("/bin/bash", ["-c", script])
-        let status = Int32(result.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        // The status is the last line; quit_and_wait prints what it is waiting for first.
+        let lastLine = result.output.split(separator: "\n").last.map(String.init) ?? ""
+        let status = Int32(lastLine.trimmingCharacters(in: .whitespacesAndNewlines))
         #expect(status != nil, "test harness did not print a status: \(result.output)")
         return status ?? -1
     }
@@ -94,10 +98,43 @@ import Testing
         return (app, marker)
     }
 
-    private static func unregister(_ app: URL) throws {
-        let script = "source \(shellQuote(libPath))\nunregister_login_item \(shellQuote(app.path))"
+    @discardableResult
+    private static func unregister(_ app: URL, timeout: Int = 5) throws -> String {
+        let script = "source \(shellQuote(libPath))\nRESOLUTE_UNREGISTER_TIMEOUT=\(timeout)\nunregister_login_item \(shellQuote(app.path))"
         let result = try run("/bin/bash", ["-c", script])
         #expect(result.status == 0, "\(result.output)")
+        return result.output
+    }
+
+    /// A fake Resolute.app 0.2.0 whose "binary" runs `body`.
+    private static func fakeApp(running body: String, in folder: URL) throws -> URL {
+        let (app, _) = try fakeApp(version: "0.2.0", in: folder)
+        try Data("#!/bin/sh\n\(body)\n".utf8).write(to: app.appending(path: "Contents/MacOS/Resolute"))
+        return app
+    }
+
+    /// A build labelled 0.2 from before the flag existed starts the menu-bar app instead;
+    /// it must not keep the uninstaller waiting.
+    @Test func stopsABuildThatStartsTheAppInstead() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let pidFile = folder.appending(path: "pid")
+        let app = try Self.fakeApp(running: "echo $$ > \(Self.shellQuote(pidFile.path)); exec sleep 30", in: folder)
+        let started = Date()
+        let output = try Self.unregister(app, timeout: 1)
+        #expect(Date().timeIntervalSince(started) < 4)
+        #expect(output.contains("Turn it off in System Settings > General > Login Items."))
+        let pid = try #require(Int32(String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        #expect(kill(pid, 0) != 0, "the stand-in app is still running")
+    }
+
+    @Test func saysWhenLaunchAtLoginCannotBeTurnedOff() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let app = try Self.fakeApp(running: "echo 'Operation not permitted' >&2; exit 1", in: folder)
+        let output = try Self.unregister(app)
+        #expect(output.contains("Could not turn off Launch at Login: Operation not permitted"))
+        #expect(output.contains("Turn it off in System Settings > General > Login Items."))
     }
 
     /// 0.1 builds start the whole menu-bar app for a flag they don't know, which would
@@ -115,10 +152,28 @@ import Testing
 
     // MARK: - quit_and_wait
 
+    /// The app may be asking about unsaved changes when it is asked to quit; osascript
+    /// must not wait (up to two minutes) for that answer before the timed wait begins.
+    @Test func asksTheAppToQuitWithoutWaitingForItsAnswer() throws {
+        let calls = FileManager.default.temporaryDirectory.appending(path: "ScriptTests-calls-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: calls) }
+        let stub = """
+        polls=0
+        osascript() {
+          echo "$*" >> \(Self.shellQuote(calls.path))
+          if [[ "$*" == *"to quit"* ]]; then return 0; fi
+          if [[ -s \(Self.shellQuote(calls.path)) && $(wc -l < \(Self.shellQuote(calls.path))) -gt 2 ]]; then echo false; else echo true; fi
+        }
+        """
+        #expect(try Self.quitAndWaitStatus(stub: stub, env: ["RESOLUTE_QUIT_POLL_INTERVAL": "0.05"]) == 0)
+        let sent = try String(contentsOf: calls, encoding: .utf8)
+        #expect(sent.contains("ignoring application responses"))
+    }
+
     @Test func quitAndWaitSucceedsAtOnceWhenNothingIsRunning() throws {
         let stub = """
         osascript() {
-          if [[ "$2" == *"tell application"* ]]; then return 0; fi
+          if [[ "$*" == *"to quit"* ]]; then return 0; fi
           echo "false"
         }
         """
@@ -135,7 +190,7 @@ import Testing
         trap 'rm -f "$polls"' EXIT
         echo 0 > "$polls"
         osascript() {
-          if [[ "$2" == *"tell application"* ]]; then return 0; fi
+          if [[ "$*" == *"to quit"* ]]; then return 0; fi
           local n; n="$(cat "$polls")"
           if (( n < 3 )); then
             echo $((n + 1)) > "$polls"
@@ -152,7 +207,7 @@ import Testing
     @Test func quitAndWaitGivesUpWhenTheAppNeverStops() throws {
         let stub = """
         osascript() {
-          if [[ "$2" == *"tell application"* ]]; then return 0; fi
+          if [[ "$*" == *"to quit"* ]]; then return 0; fi
           echo "true"
         }
         """

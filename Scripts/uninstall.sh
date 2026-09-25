@@ -10,17 +10,18 @@ BIN_DIR="${RESOLUTE_BIN_DIR:-/usr/local/bin}"
 BUNDLE_ID="com.omarhanafy.Resolute"
 APP_PATH="$APP_DIR/Resolute.app"
 
-# Turn off Launch at Login while the app is still there to do it.
-if [[ -d "$APP_PATH" ]]; then
-  unregister_login_item "$APP_PATH"
-fi
-
 # The old process may still be exiting, or may be asking about unsaved custom
-# resolutions; either way, deleting the bundle under it would be unsafe.
+# resolutions; either way, deleting the bundle under it would be unsafe. Nothing is
+# changed until it has quit.
 if ! quit_and_wait; then
   echo "Resolute is still running (it may be asking about unsaved custom resolutions)." >&2
   echo "Quit it and run this script again." >&2
   exit 1
+fi
+
+# Turn off Launch at Login while the app is still there to do it.
+if [[ -d "$APP_PATH" ]]; then
+  unregister_login_item "$APP_PATH"
 fi
 
 rm -rf "$APP_PATH"
