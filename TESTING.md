@@ -47,6 +47,11 @@ The automated tests can't see the screen, so these checks need a person, and som
 - [ ] Selecting rows and pressing Delete removes exactly those rows; Revert brings them back and clears the selection.
 - [ ] A display whose override file can't be read shows why, with Show in Finder, and Remove Override… when it is a file.
 - [ ] Switching displays, or quitting, with unsaved changes asks first.
+- [ ] At the window's smallest size every button title is whole: Revert and **Save…** move to a second row.
+- [ ] With the editor open, run `sudo resolute overrides add 1920x1080 -d <display>` in Terminal and come back: the editor shows the new entry. With unsaved changes it keeps them under a banner instead, and **Save…** first asks whether to save anyway, discard the changes or cancel.
+- [ ] Removing a 1× row that a HiDPI row renders at shows a note under the table. **Add 1× Entry** puts the row back.
+- [ ] **Restore Backup…** lists the backups newest first, in local time, with what each holds. It is greyed while there are unsaved changes. Restoring one asks for the password, and the backups then include the file it replaced.
+- [ ] With VoiceOver on (⌘F5), an editor row reads as one line, such as "1280 by 800, HiDPI, rendered at 2560 by 1600", and a hidden mode in the menu (with ⌥ held) is read as "Hidden mode".
 - [ ] `sudo resolute overrides add 2560x1080 -d <display>` and `… remove …` behave the same, and `resolute overrides list` shows the result.
 - [ ] `resolute overrides backups -d <display>` lists the backups with local times. `sudo resolute overrides restore 1 -d <display>` puts the newest back, and `sudo resolute overrides prune --keep 1` deletes the others.
 - [ ] Removing a 1× entry that a HiDPI entry renders at (`sudo resolute overrides remove 2560x1440@1x` after adding 1280x720) says so and how to put it back.

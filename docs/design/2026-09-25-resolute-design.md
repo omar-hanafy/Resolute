@@ -324,9 +324,26 @@ Commit messages describe the change only (no tool attribution).
   user and cannot create that file in `/Library/Application Support`, so its scripts take
   the same flock(2) lock with `lockf(1)`. osascript reports every failed script as status
   1; the script's own status and message are read from its report.
+- **The editor asks before replacing a change made elsewhere.** It keeps the state of
+  the installed file from its last read. Save, Remove Override… and Restore Backup…
+  compare first and, before any password prompt, offer Save Anyway, Discard My Changes
+  (Reload when there are none) or Cancel; the script checks again under the lock. The
+  editor reads the file again when its window becomes key and when the app becomes
+  active, and keeps unsaved changes under a banner rather than reloading over them. A
+  restore compares with the file as it was when the backup list was read, because
+  closing the sheet makes the window key, which would otherwise reload a changed file
+  without a word.
 - **Backups can be listed, restored and pruned.** Names stay in UTC so they sort by time
   whatever the time zone; listings show local time. A restore writes the backup's bytes
   as they are, and backs up what it replaces.
+- **VoiceOver.** A table row is read from its first cell, which carries the whole row;
+  sizes say "by", because "×" is read as "multiplied by". In the menu only the
+  hidden-mode sign gets a description, as the other symbols repeat their item's title.
+- **The editor's layout is tested without showing it.** A test lays the window out with
+  40 rows, at its default and its minimum size, in a window that is never shown, and
+  lists the views outside it. NavigationSplitView, which 0.1 dropped for pushing the
+  buttons off the window, fails it. At the minimum size Revert and Save… move to a
+  second row rather than cut button titles short.
 - **JSON has every key.** A missing value is `null`, never an absent key
   ([docs/json.md](../json.md)).
 - **Rates and scales are decimal numbers.** `Double(_:)` also read "0x3c" as 60.
