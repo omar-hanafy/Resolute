@@ -43,6 +43,14 @@ public struct ModeQuery: Hashable, Sendable {
         scale > 0 && scale <= 8
     }
 
+    /// A plain decimal number such as "60" or "59.94": ASCII digits, with at most one point
+    /// between them. `Double(_:)` alone also reads "0x3c", "6e1", "+60", "inf" and "nan".
+    public static func decimal(_ text: some StringProtocol) -> Double? {
+        let parts = text.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isNumber } }) else { return nil }
+        return Double(String(text))
+    }
+
     /// Parses "1920x1080", "1920×1080", "1920x1080@2x", "1920x1080@60" and
     /// "1920x1080@2x@59.94Hz". A scale or rate given twice is an error, not a choice.
     public init(resolution text: String) throws {
@@ -65,9 +73,9 @@ public struct ModeQuery: Hashable, Sendable {
         self.width = width
         self.height = height
         for part in parts {
-            if self.scale == nil, part.hasSuffix("x"), let scale = Double(part.dropLast()), Self.isPlausible(scale: scale) {
+            if self.scale == nil, part.hasSuffix("x"), let scale = Self.decimal(part.dropLast()), Self.isPlausible(scale: scale) {
                 self.scale = scale
-            } else if self.refreshRate == nil, let hertz = Double(part.hasSuffix("hz") ? String(part.dropLast(2)) : part),
+            } else if self.refreshRate == nil, let hertz = Self.decimal(part.hasSuffix("hz") ? part.dropLast(2) : Substring(part)),
                       Self.isPlausible(refreshRate: hertz) {
                 self.refreshRate = hertz
             } else {
@@ -174,7 +182,8 @@ public struct ModeQuery: Hashable, Sendable {
     }
 
     /// The three system resolutions closest in area to the one asked for or kept, at the
-    /// scale asked for when there is one.
+    /// scale asked for when there is one. A HiDPI resolution that renders at the size asked
+    /// for comes first: sizes are in points, and that size was probably given in pixels.
     func suggestions(on display: Display) -> [String] {
         let query = withKeptSize(on: display)
         guard let width = query.width, let height = query.height else { return [] }
@@ -182,12 +191,19 @@ public struct ModeQuery: Hashable, Sendable {
         func distance(_ group: ResolutionGroup) -> Int {
             abs(group.key.width * group.key.height - target)
         }
+        func rendersAtTarget(_ group: ResolutionGroup) -> Bool {
+            group.isHiDPI && group.key.pixelWidth == width && group.key.pixelHeight == height && (scale.map { $0 > 1 } ?? true)
+        }
         return ModeCatalog.groups(display.modes.filter { $0.origin == .system })
-            .filter { group in scale.map { abs(group.modes[0].scale - $0) < 0.01 } ?? true }
+            .filter { group in rendersAtTarget(group) || (scale.map { abs(group.modes[0].scale - $0) < 0.01 } ?? true) }
             .sorted { lhs, rhs in
-                (distance(lhs), lhs.isHiDPI ? 0 : 1, -lhs.key.width) < (distance(rhs), rhs.isHiDPI ? 0 : 1, -rhs.key.width)
+                (rendersAtTarget(lhs) ? 0 : 1, distance(lhs), lhs.isHiDPI ? 0 : 1, -lhs.key.width)
+                    < (rendersAtTarget(rhs) ? 0 : 1, distance(rhs), rhs.isHiDPI ? 0 : 1, -rhs.key.width)
             }
             .prefix(3)
-            .map { $0.sizeText + ($0.isHiDPI ? " (HiDPI)" : "") }
+            .map { group in
+                if rendersAtTarget(group) { return "\(group.sizeText) (HiDPI, rendered at \(group.pixelSizeText) pixels)" }
+                return group.sizeText + (group.isHiDPI ? " (HiDPI)" : "")
+            }
     }
 }

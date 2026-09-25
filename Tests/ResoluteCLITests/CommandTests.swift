@@ -97,6 +97,7 @@ import Testing
         ["960x600", "--mode-id", "55"], ["--mode-id", "55", "--refresh", "60"], ["--mode-id", "55", "--scale", "1"],
         ["--mode-id", "55", "--default"], ["960x600", "--default"], ["--default", "--refresh", "60"],
         ["1496x967@50", "--refresh", "60"], ["1728x1117@1x", "--scale", "2"], ["1496x967@60@50"],
+        ["--refresh", "0x3c"], ["--refresh", "6e1"], ["--scale", "0x2"], ["--scale", "2e0"], ["1728x1117@0x3c"],
     ])
     func rejectsImpossibleOrContradictoryRequestsBeforeChangingAnything(arguments: [String]) async {
         let service = FakeDisplays([Sample.builtIn])
@@ -104,6 +105,16 @@ import Testing
         #expect(result?.code == 64)
         #expect(result?.message.contains("Usage: resolute set") == true)
         #expect(service.changes.isEmpty)
+    }
+
+    @Test func takesRatesAndScalesAsPlainNumbers() async {
+        #expect(await failure(["set", "--refresh", "0x3c"])?.message
+            .hasPrefix("Error: --refresh takes a rate in hertz, for example 60 or 59.94.") == true)
+        #expect(await failure(["set", "--scale", "2e0"])?.message
+            .hasPrefix("Error: --scale takes 2 for HiDPI or 1 for low resolution.") == true)
+        let service = FakeDisplays([Sample.builtIn])
+        _ = try? await resolute(["set", "--refresh", "60.00", "--scale", "2"], service: service)
+        #expect(service.changes == [.init(displayID: 1, modeID: 55, scope: .permanent)])
     }
 
     @Test func saysWhatAMistakenOptionWas() async {

@@ -21,11 +21,12 @@ struct SetCommand: ParsableCommand, ContextCommand {
 
     @OptionGroup var target: DisplayOptions
 
+    // Read as text, so that only plain decimal numbers count: "0x3c" is not 60 Hz.
     @Option(help: "2 for HiDPI, 1 for low resolution.")
-    var scale: Double?
+    var scale: String?
 
-    @Option(help: "Refresh rate in Hz.")
-    var refresh: Double?
+    @Option(help: "Refresh rate in Hz, for example 60 or 59.94.")
+    var refresh: String?
 
     @Option(name: .customLong("mode-id"), help: "An exact mode ID.")
     var modeID: Int32?
@@ -46,10 +47,10 @@ struct SetCommand: ParsableCommand, ContextCommand {
     var dryRun = false
 
     func validate() throws {
-        if let refresh, !ModeQuery.isPlausible(refreshRate: refresh) {
+        if let refresh, !(ModeQuery.decimal(refresh).map(ModeQuery.isPlausible(refreshRate:)) ?? false) {
             throw ValidationError("--refresh takes a rate in hertz, for example 60 or 59.94.")
         }
-        if let scale, !ModeQuery.isPlausible(scale: scale) {
+        if let scale, !(ModeQuery.decimal(scale).map(ModeQuery.isPlausible(scale:)) ?? false) {
             throw ValidationError("--scale takes 2 for HiDPI or 1 for low resolution.")
         }
         if modeID != nil, resolution != nil || scale != nil || refresh != nil || useDefault {
@@ -92,15 +93,15 @@ struct SetCommand: ParsableCommand, ContextCommand {
         do {
             query = try resolution.map { try ModeQuery(resolution: $0) } ?? ModeQuery()
         } catch ResoluteError.invalidResolution(let text) {
-            if refresh == nil, let rate = Double(text), ModeQuery.isPlausible(refreshRate: rate), rate <= 1_000 {
+            if refresh == nil, let rate = ModeQuery.decimal(text), ModeQuery.isPlausible(refreshRate: rate), rate <= 1_000 {
                 throw ResoluteError.usage("“\(text)” is not a resolution. To change only the refresh rate, use --refresh \(text).")
             }
             throw ResoluteError.usage(ResoluteError.invalidResolution(text).localizedDescription)
         } catch let error as ResoluteError {
             throw ResoluteError.usage(error.localizedDescription)
         }
-        if let scale { query.scale = scale }
-        if let refresh { query.refreshRate = refresh }
+        if let scale = scale.flatMap(ModeQuery.decimal) { query.scale = scale }
+        if let refresh = refresh.flatMap(ModeQuery.decimal) { query.refreshRate = refresh }
         query.modeID = modeID
         query.useDefault = useDefault
         query.allowHidden = allowHidden

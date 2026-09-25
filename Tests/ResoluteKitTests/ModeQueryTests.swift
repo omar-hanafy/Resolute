@@ -43,6 +43,27 @@ import Testing
         }
     }
 
+    /// `Double(_:)` also reads hexadecimal, exponents, signs, "inf" and "nan", so "@0x3c" was
+    /// 60 Hz. Rates and scales are plain decimal numbers.
+    @Test(arguments: [
+        "1920x1080@0x3c", "1920x1080@6e1", "1920x1080@+60", "1920x1080@60.", "1920x1080@.5x", "1920x1080@0x2x",
+        "1920x1080@2e0x", "1920x1080@nan", "1920x1080@59,94", "1920x1080@٦٠",
+    ])
+    func acceptsOnlyDecimalRatesAndScales(text: String) {
+        #expect(throws: ResoluteError.invalidResolution(text)) {
+            try ModeQuery(resolution: text)
+        }
+    }
+
+    @Test func readsDecimalNumbers() {
+        #expect(ModeQuery.decimal("60") == 60)
+        #expect(ModeQuery.decimal("59.94") == 59.94)
+        #expect(ModeQuery.decimal("0.5") == 0.5)
+        for text in ["", "0x3c", "6e1", "+60", "-60", "60.", ".5", "inf", "nan", "1,5", "٦٠", " 60"] {
+            #expect(ModeQuery.decimal(text) == nil, "\(text)")
+        }
+    }
+
     @Test(arguments: ["9223372036854775807x2", "70000x1080", "1920x70000", "99999999999999999999999x2"])
     func saysHowBigASizeMayBe(text: String) {
         #expect(throws: ResoluteError.sizeTooLarge(text)) {
@@ -131,6 +152,21 @@ import Testing
         )
         #expect(throws: expected) {
             try ModeQuery(resolution: "1500x970").resolve(on: display)
+        }
+    }
+
+    /// Sizes are in points. 2992 × 1934 is what 1496 × 967 HiDPI renders, so someone typing
+    /// it most likely means that mode.
+    @Test func suggestsTheHiDPIModeThatRendersAtTheSizeGiven() {
+        for text in ["2992x1934@2x", "2992x1934@2x@60"] {
+            do {
+                _ = try ModeQuery(resolution: text).resolve(on: display)
+                Issue.record("\(text) is no mode's size in points")
+            } catch ResoluteError.modeNotFound(_, let suggestions) {
+                #expect(suggestions.first == "1496 × 967 (HiDPI, rendered at 2992 × 1934 pixels)", "\(text)")
+            } catch {
+                Issue.record("\(text): \(error)")
+            }
         }
     }
 
