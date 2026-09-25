@@ -329,20 +329,15 @@ final class CustomResolutionsModel {
            let edited = targets.first(where: { $0.key == selection }) {
             result.append(Target(key: selection, name: edited.name, isConnected: false, hasOverride: edited.hasOverride))
         }
-        targets = result
+        if result != targets { targets = result }
         if let selection, result.contains(where: { $0.key == selection }) { return }
         select(result.first?.key)
     }
 
     /// Switches to `key`; when that would lose unsaved changes it sets `pendingSelection`
-    /// instead, so the window can ask first. Choosing the selected display again reads it
-    /// again.
+    /// instead, so the window can ask first.
     func requestSelection(_ key: OverrideKey?) {
-        guard !isWorking, let key else { return }
-        guard key != selection else {
-            refresh()
-            return
-        }
+        guard !isWorking, let key, key != selection else { return }
         if hasChanges {
             pendingSelection = key
         } else {
@@ -373,6 +368,13 @@ final class CustomResolutionsModel {
         requestSelection(OverrideKey(display: display))
     }
 
+    /// For the window shown from the menu: selects `displayID` when one is given, and
+    /// reads everything again, also when that display was selected already.
+    func reopen(selecting displayID: CGDirectDisplayID?) {
+        select(displayID: displayID)
+        refresh()
+    }
+
     /// Reads the displays and the selected override again, for a window that comes back
     /// into use: another app or `resolute` may have changed them meanwhile. A changed file
     /// is read again, unless there are unsaved changes, which stay, under a banner.
@@ -381,20 +383,20 @@ final class CustomResolutionsModel {
         guard !isWorking, conflict == nil else { return }
         reloadTargets()
         guard let selection else { return }
-        backups = store.backups(for: selection)
+        // Assigned only when different, so a refresh that finds nothing new leaves the
+        // window alone: this runs whenever the window becomes key.
+        let listed = store.backups(for: selection)
+        if listed != backups { backups = listed }
         // An override that could not be read has nothing to lose.
         guard draft != nil else {
             load()
             return
         }
-        guard (try? store.installedState(for: selection)) != installedState else {
-            changedOnDisk = false
-            return
-        }
-        if hasChanges {
-            changedOnDisk = true
-        } else {
+        let changed = (try? store.installedState(for: selection)) != installedState
+        if changed, !hasChanges {
             load()
+        } else if changed != changedOnDisk {
+            changedOnDisk = changed
         }
     }
 

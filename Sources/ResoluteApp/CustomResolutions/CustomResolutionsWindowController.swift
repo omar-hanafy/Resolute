@@ -41,8 +41,7 @@ final class CustomResolutionsWindowController: NSWindowController, NSWindowDeleg
 
     /// Shows the window, selecting `displayID` when one is given, with what is on disk now.
     func show(selecting displayID: CGDirectDisplayID?) {
-        model.select(displayID: displayID)
-        model.refresh()
+        model.reopen(selecting: displayID)
         NSApp.activate()
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)

@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import Observation
 import Testing
 @testable import ResoluteApp
 @testable import ResoluteKit
@@ -47,6 +48,18 @@ struct GatedRunner: CommandRunning {
     func run(_ script: String) async throws {
         await gate.wait()
         try await ShellCommandRunner().run(script)
+    }
+}
+
+/// Set by an observation's change handler, which may run on any thread.
+final class ChangeFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool { lock.withLock { value } }
+
+    func set() {
+        lock.withLock { value = true }
     }
 }
 
@@ -602,7 +615,7 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
         let model = makeModel(root: root, displays: StubDisplays([first, second]))
         try install(theirs, under: root)
-        model.select(displayID: first.id)
+        model.reopen(selecting: first.id)
         #expect(model.rows.map(\.entry) == theirs.resolutions)
 
         model.requestSelection(OverrideKey(display: second))
@@ -610,6 +623,29 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         model.requestSelection(OverrideKey(display: first))
         #expect(model.rows.map(\.entry) == [qhd])
         #expect(!model.changedOnDisk)
+    }
+
+    /// A refresh runs each time the window becomes key; with nothing changed it must not
+    /// touch what the window shows, or every refresh would redraw it.
+    @Test func changesNothingWhenNothingChanged() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [hd]), under: root)
+        try stageBackup(DisplayOverride(key: OverrideKey(display: first), resolutions: [qhd]), at: "141320", under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        _ = model.add(qhd)
+        model.selectedEntries = [qhd]
+        #expect(!model.backups.isEmpty)
+
+        let changed = ChangeFlag()
+        withObservationTracking {
+            _ = (model.targets, model.selection, model.draft, model.backups, model.changedOnDisk, model.installedState)
+            _ = (model.source, model.readFailure, model.conflict?.id, model.notice?.id, model.selectedEntries)
+        } onChange: {
+            changed.set()
+        }
+        model.refresh()
+        #expect(!changed.isSet)
     }
 
     @Test func refreshesWhichDisplaysHaveOverrides() throws {
