@@ -83,6 +83,18 @@ import Testing
         #expect(service.calls == [Call(modeID: 2, scope: .session)])
     }
 
+    /// The live tests run a listed refresh rate through the check hidden modes get, since
+    /// the development Mac has no hidden modes.
+    @Test func checksAListedModeWhenAskedTo() {
+        let service = FakeDisplayService(display: TestData.fullHD(), ignoring: [2])
+        var switcher = ModeSwitcher(service: service)
+        switcher.verifiesListedModes = true
+        #expect(throws: ResoluteError.modeNotApplied(display: "Full HD Monitor")) {
+            try switcher.apply(modeID: 2, to: 2, trial: true) { .keepForSession }
+        }
+        #expect(service.calls == [Call(modeID: 2, scope: .session), Call(modeID: 1, scope: .session)])
+    }
+
     @Test func fallsBackToTheDefaultModeWhenANeverAppliedModeCannotBeUndone() {
         let service = FakeDisplayService(display: TestData.fullHD(currentModeID: 2), refusing: [2], ignoring: [90])
         #expect(throws: ResoluteError.modeNotApplied(display: "Full HD Monitor")) {

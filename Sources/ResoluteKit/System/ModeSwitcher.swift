@@ -58,6 +58,10 @@ public struct ModeSwitcher: Sendable {
     }
 
     private let service: any DisplayControlling
+    /// Also checks that a listed mode on trial took, as a hidden one is checked. Only the
+    /// live tests set it, to run the hidden-mode path on a Mac without hidden modes;
+    /// CoreGraphics reports its own failures for listed modes.
+    var verifiesListedModes = false
 
     public init(service: any DisplayControlling) {
         self.service = service
@@ -91,7 +95,7 @@ public struct ModeSwitcher: Sendable {
         // SkyLight reports no errors, so check that a hidden mode really took before asking
         // whether to keep it; CoreGraphics reports its own failures for listed modes.
         let isListed = before?.modes.first { $0.modeID == modeID }?.origin == .system
-        if !isListed {
+        if !isListed || verifiesListedModes {
             guard waitUntilCurrent(modeID, on: displayID) else {
                 Self.log.error("\(name, privacy: .public) did not report mode \(modeID) within half a second")
                 // Put the previous mode back in case the switch lands after all; when it never
