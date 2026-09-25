@@ -338,6 +338,19 @@ import Testing
         #expect(installed.productName == "Color LCD")
     }
 
+    /// Entries outside the sizes `add` writes (old RDM or hand-made ones) can still be removed.
+    @Test func removesAnEntryAddWouldRefuse() async throws {
+        let root = try stagedRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let locations = OverrideLocations.staged(at: root)
+        let key = OverrideKey(vendorID: 0x610, productID: 0xA050)
+        let file = locations.userFile(for: key)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try DisplayOverride(key: key, resolutions: [.hiDPI(width: 300, height: 180, flags: .standard)]).propertyListData().write(to: file)
+        try await resolute(["overrides", "remove", "300x180", "--root", root.path(percentEncoded: false)])
+        #expect(try OverrideStore(locations: locations).installedOverride(for: key)?.resolutions.isEmpty == true)
+    }
+
     @Test func pointsAtTheOneTimesEntryWhenTheHiDPIOneIsMissing() async throws {
         let root = try stagedRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -388,6 +401,8 @@ import Testing
             == "“frobnicate” is not an overrides command. The overrides commands are list, show, add, remove and reset.")
         #expect(ResoluteCommand.unknownCommandMessage(for: ["help", "mode"])
             == "“mode” is not a resolute command. Did you mean “resolute help modes”?")
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["overrides", "help"])
+            == "“help” is not an overrides command. Did you mean “resolute help overrides”?")
     }
 
     @Test func leavesRealCommandsAndOptionsAlone() {

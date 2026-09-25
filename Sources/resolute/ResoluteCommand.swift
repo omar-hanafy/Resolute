@@ -83,6 +83,9 @@ struct ResoluteCommand: AsyncParsableCommand {
             }
             let word = arguments[1]
             let problem = "“\(word)” is not an overrides command."
+            if word == "help" {
+                return problem + " Did you mean “resolute help overrides”?"
+            }
             if let command = overridesCommands.first(where: { isTypo(word.lowercased(), of: $0) }) {
                 return problem + " Did you mean “resolute overrides \(command)”?"
             }

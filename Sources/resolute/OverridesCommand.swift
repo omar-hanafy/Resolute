@@ -113,11 +113,13 @@ struct EntryOptions: ParsableArguments {
     @Flag(help: "A 1× entry instead of a HiDPI one (same as @1x).")
     var standard = false
 
-    /// The entry named, checked as `add` would check it. Problems are usage errors.
-    func entry(flags: String? = nil) throws -> ScaleResolution {
+    /// The entry named. For `add` it must also be one Resolute writes; `remove` takes any
+    /// entry a file may hold, such as an old one below the sizes `add` accepts. Problems
+    /// are usage errors.
+    func entry(flags: String? = nil, adding: Bool) throws -> ScaleResolution {
         do {
             let entry = try ScaleResolution(parsing: resolution, standard: standard, flags: try flags.map { try HiDPIFlags(parsing: $0) })
-            try OverrideDraft.validate(entry)
+            if adding { try OverrideDraft.validate(entry) }
             return entry
         } catch let error as ResoluteError {
             throw ResoluteError.usage(error.localizedDescription)
@@ -126,11 +128,11 @@ struct EntryOptions: ParsableArguments {
 
     /// Reports a bad entry while parsing. Only something shaped like a size is checked:
     /// a bare word is more likely the value of a mistyped option, which ArgumentParser
-    /// reports after validation; anything else is reported by `entry(flags:)` later.
-    func validate(flags: String? = nil) throws {
+    /// reports after validation; anything else is reported by `entry(flags:adding:)` later.
+    func validate(flags: String? = nil, adding: Bool) throws {
         guard Output.looksLikeSize(resolution) else { return }
         do {
-            _ = try entry(flags: flags)
+            _ = try entry(flags: flags, adding: adding)
         } catch ResoluteError.usage(let message) {
             throw ValidationError(message)
         }
@@ -210,7 +212,7 @@ struct AddResolution: AsyncParsableCommand, ContextCommand {
     @OptionGroup var location: LocationOptions
 
     func validate() throws {
-        try entry.validate(flags: flags)
+        try entry.validate(flags: flags, adding: true)
     }
 
     func run() async throws {
@@ -218,7 +220,7 @@ struct AddResolution: AsyncParsableCommand, ContextCommand {
     }
 
     func run(in context: CommandContext) async throws {
-        let newEntry = try entry.entry(flags: flags)
+        let newEntry = try entry.entry(flags: flags, adding: true)
         let target = try target.target(in: context)
         let installer = try location.installer(in: context)
         try await location.withLock(in: context) {
@@ -239,12 +241,9 @@ struct RemoveResolution: AsyncParsableCommand, ContextCommand {
     static let configuration = CommandConfiguration(
         commandName: "remove",
         abstract: "Remove a custom resolution from a display's override.",
-        discussion: """
-            Without an override of its own, the display's override starts as a copy of the one
-            macOS ships. Removing a HiDPI entry leaves the 1× entry at its pixel size, which the
-            override may need for other reasons; remove that separately if it was only there
-            for the HiDPI entry.
-            """
+        discussion: "Without an override of its own, the display's override starts as a copy of the one macOS ships. "
+            + "Removing a HiDPI entry leaves the 1× entry at its pixel size, which the override may need for other reasons; "
+            + "remove that separately if it was only there for the HiDPI entry."
     )
 
     @OptionGroup var entry: EntryOptions
@@ -252,7 +251,7 @@ struct RemoveResolution: AsyncParsableCommand, ContextCommand {
     @OptionGroup var location: LocationOptions
 
     func validate() throws {
-        try entry.validate()
+        try entry.validate(adding: false)
     }
 
     func run() async throws {
@@ -260,7 +259,7 @@ struct RemoveResolution: AsyncParsableCommand, ContextCommand {
     }
 
     func run(in context: CommandContext) async throws {
-        let unwanted = try entry.entry()
+        let unwanted = try entry.entry(adding: false)
         let target = try target.target(in: context)
         let installer = try location.installer(in: context)
         let store = OverrideStore(locations: location.locations)
