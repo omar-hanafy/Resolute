@@ -31,7 +31,7 @@ import Testing
 
     @Test func keepsEntriesItDoesNotModel() throws {
         let nineBytes = hexData("00000f00 00000960 00")
-        let twelveBytes = hexData("00000672 0000041a 00000001")
+        let twelveBytes = hexData("00000673 0000041a 00000001")  // odd pixels: no HiDPI mode
         let plainSixteen = hexData("00000780 00000438 00000000 00200000")
         let entries = ScaleResolutionCodec.decode([nineBytes, twelveBytes, plainSixteen, 32_768_800])
         #expect(Array(entries.prefix(3)) == [
@@ -61,6 +61,22 @@ import Testing
             .standard(width: 1920, height: 1080),
             .hiDPI(width: 1280, height: 800, flags: HiDPIFlags(primary: 1, secondary: 0x0020_0000)),
         ])
+    }
+
+    /// Apple writes HiDPI modes as 12-byte entries (pixel width, pixel height, flags with
+    /// bit 0 for HiDPI). They are kept byte for byte but count as the modes they describe.
+    @Test func readsApplesTwelveByteEntriesAsTheModesTheyDescribe() {
+        let hiDPI = hexData("00000a00 00000640 00000001")
+        let oneTimes = hexData("00000780 000004b0 00000000")
+        let entries = ScaleResolutionCodec.decode([hiDPI, oneTimes])
+        #expect(entries.map(\.sizeText) == ["1920 × 1200", "1280 × 800"])
+        #expect(entries.map(\.kindText) == ["1×", "HiDPI"])
+        #expect(entries[1].pixelSize?.width == 2560)
+        #expect(entries[1].summary == "1280 × 800 HiDPI (2560 × 1600 px, a 12-byte entry kept as is)")
+        #expect(entries.allSatisfy { !$0.isEditable })
+        #expect(entries[1].sameMode(as: .hiDPI(width: 1280, height: 800, flags: .standard)))
+        #expect(ScaleResolution.standard(width: 1920, height: 1200).sameMode(as: entries[0]))
+        #expect(ScaleResolutionCodec.encode(entries).compactMap { $0 as? Data } == [oneTimes, hiDPI])
     }
 
     @Test func writesExactlyTheListedEntriesOneTimesFirstLargestFirst() {

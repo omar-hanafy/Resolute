@@ -85,13 +85,20 @@ public enum ScaleResolution: Hashable, Sendable {
         return true
     }
 
+    /// The mode this entry stands for: itself, or the mode a kept entry names (see
+    /// `PreservedEntry.describedMode`).
+    public var describedMode: ScaleResolution? {
+        if case .preserved(let entry) = self { return entry.describedMode }
+        return self
+    }
+
     /// "2560 × 1080"
     public var sizeText: String {
         switch self {
         case .hiDPI(let width, let height, _), .standard(let width, let height):
             "\(width) × \(height)"
         case .preserved(let entry):
-            entry.summary
+            entry.describedMode?.sizeText ?? entry.summary
         }
     }
 
@@ -100,7 +107,7 @@ public enum ScaleResolution: Hashable, Sendable {
         switch self {
         case .hiDPI: "HiDPI"
         case .standard: "1×"
-        case .preserved: "Kept as is"
+        case .preserved(let entry): entry.describedMode?.kindText ?? "Kept as is"
         }
     }
 
@@ -109,7 +116,7 @@ public enum ScaleResolution: Hashable, Sendable {
         switch self {
         case .hiDPI(let width, let height, _): (width * 2, height * 2)
         case .standard(let width, let height): (width, height)
-        case .preserved: nil
+        case .preserved(let entry): entry.describedMode?.pixelSize
         }
     }
 
@@ -121,15 +128,22 @@ public enum ScaleResolution: Hashable, Sendable {
         case .standard(let width, let height):
             "\(width) × \(height) 1×"
         case .preserved(let entry):
-            "\(entry.summary), kept as is"
+            switch entry.describedMode {
+            case .hiDPI(let width, let height, _)?:
+                "\(width) × \(height) HiDPI (\(width * 2) × \(height * 2) px, a 12-byte entry kept as is)"
+            case .standard(let width, let height)?:
+                "\(width) × \(height) 1× (a 12-byte entry kept as is)"
+            default:
+                "\(entry.summary), kept as is"
+            }
         }
     }
 
-    /// Same kind and size, whatever the flags.
+    /// Same kind and size, whatever the flags or the form the entry is written in.
     public func sameMode(as other: ScaleResolution) -> Bool {
-        switch (self, other) {
-        case let (.hiDPI(lhsWidth, lhsHeight, _), .hiDPI(rhsWidth, rhsHeight, _)),
-             let (.standard(lhsWidth, lhsHeight), .standard(rhsWidth, rhsHeight)):
+        switch (describedMode, other.describedMode) {
+        case let (.hiDPI(lhsWidth, lhsHeight, _)?, .hiDPI(rhsWidth, rhsHeight, _)?),
+             let (.standard(lhsWidth, lhsHeight)?, .standard(rhsWidth, rhsHeight)?):
             lhsWidth == rhsWidth && lhsHeight == rhsHeight
         default:
             false
@@ -150,6 +164,19 @@ public enum PreservedEntry: Hashable, Sendable {
         case .value(let archive):
             return (try? PropertyListSerialization.propertyList(from: archive, format: nil)) ?? archive
         }
+    }
+
+    /// The mode a 12-byte entry names: pixel width, pixel height and a flags word whose
+    /// bit 0 marks HiDPI, the form Apple's own override files use. Nil for anything else.
+    public var describedMode: ScaleResolution? {
+        guard case .data(let data) = self, data.count == 12 else { return nil }
+        let words = ScaleResolutionCodec.words(data)
+        guard words[0] > 0, words[1] > 0 else { return nil }
+        guard words[2] & HiDPIFlags.hiDPIBit != 0 else {
+            return .standard(width: Int(words[0]), height: Int(words[1]))
+        }
+        guard words[0] % 2 == 0, words[1] % 2 == 0 else { return nil }
+        return .hiDPI(width: Int(words[0] / 2), height: Int(words[1] / 2), flags: HiDPIFlags(primary: words[2], secondary: 0))
     }
 
     public var summary: String {
@@ -186,14 +213,14 @@ public enum ScaleResolutionCodec {
         }
     }
 
-    /// 1× entries, then HiDPI entries, each largest first as RDM wrote them, then the
-    /// elements Resolute does not interpret, in their original order.
+    /// 1× entries, then HiDPI entries, each largest first as RDM wrote them (kept entries
+    /// that name a mode sort with it), then the other elements in their original order.
     public static func canonicalOrder(_ entries: [ScaleResolution]) -> [ScaleResolution] {
         func rank(_ entry: ScaleResolution) -> Int {
-            switch entry {
-            case .standard: 0
-            case .hiDPI: 1
-            case .preserved: 2
+            switch entry.describedMode {
+            case .standard?: 0
+            case .hiDPI?: 1
+            case .preserved?, nil: 2
             }
         }
         return entries.enumerated().sorted { lhs, rhs in

@@ -147,6 +147,37 @@ enum CLITestError: Error {
     case notRunnable(String)
 }
 
+/// Apple's override for the built-in panel of a 16-inch MacBook Pro, as macOS 27 ships it:
+/// five 1× entries and two HiDPI entries in Apple's 12-byte form.
+func appleBuiltInOverride() -> [String: Any] {
+    [
+    "DisplayProductName": "Color LCD",
+    "DisplayVendorID": 1552,
+    "DisplayProductID": 41040,
+    "IOGFlags": 4,
+    "scale-resolutions": [
+        "0000101000000a62", "00000d80000008ba", "00000bb00000078e", "00000a40000006a0", "00000920000005e6",
+        "00000a000000064000000001", "00000780000004b000000001",
+    ].map(hexData),
+    ]
+}
+
+func hexData(_ hex: String) -> Data {
+    Data(stride(from: 0, to: hex.count, by: 2).map { offset in
+        let start = hex.index(hex.startIndex, offsetBy: offset)
+        return UInt8(hex[start..<hex.index(start, offsetBy: 2)], radix: 16)!
+    })
+}
+
+/// A staged root whose `System` folder holds Apple's file for the built-in panel.
+func stagedRootWithApplesFile() throws -> URL {
+    let root = try stagedRoot()
+    let file = OverrideLocations.staged(at: root).systemFile(for: OverrideKey(vendorID: 0x610, productID: 0xA050))
+    try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try PropertyListSerialization.data(fromPropertyList: appleBuiltInOverride(), format: .xml, options: 0).write(to: file)
+    return root
+}
+
 /// A fresh directory for a staged override root; its name has a space and a quote.
 func stagedRoot() throws -> URL {
     let url = FileManager.default.temporaryDirectory

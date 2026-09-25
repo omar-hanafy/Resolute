@@ -376,6 +376,16 @@ actor EventLog {
         #expect(reopened.resolutions == draft.working.resolutions)
     }
 
+    @Test func knowsAModeAppleWroteInItsOwnFormat() throws {
+        let apple = ScaleResolution.preserved(.data(hexData("00000a00 00000640 00000001")))
+        var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [apple]))
+        #expect(throws: ResoluteError.invalidEntry("1280 × 800 (HiDPI) is already in the list.")) {
+            try draft.add(.hiDPI(width: 1280, height: 800, flags: .standard))
+        }
+        // Its 1× partner size is not listed, so adding the 1× entry by hand still works.
+        try draft.add(.standard(width: 2560, height: 1600))
+    }
+
     @Test func removesTheGivenEntries() {
         var draft = OverrideDraft(DisplayOverride(key: key, resolutions: [
             .standard(width: 1920, height: 1080), .standard(width: 2560, height: 1440), .standard(width: 3840, height: 2160),

@@ -255,6 +255,22 @@ import Testing
         #expect(installed?.resolutions.count == 6)
     }
 
+    @Test func knowsTheHiDPIModesApplesFileAlreadyLists() async throws {
+        let root = try stagedRootWithApplesFile()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let result = await failure(["overrides", "add", "1280x800", "--root", root.path(percentEncoded: false)])
+        #expect(result?.message == "Error: 1280 × 800 (HiDPI) is already in the list.")
+        let output = try await resolute(["overrides", "show", "--json", "--root", root.path(percentEncoded: false)]).output
+        let summary = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any]
+        let entries = summary?["entries"] as? [[String: Any]] ?? []
+        #expect(entries.count == 7)
+        let apples = try #require(entries.first { $0["width"] as? Int == 1280 })
+        #expect(apples["kind"] as? String == "hidpi")
+        #expect(apples["pixelWidth"] as? Int == 2560)
+        #expect(apples["keptAsIs"] as? Bool == true)
+        #expect(apples["flags"] == nil)
+    }
+
     @Test func needsRootForTheRealFolder() async {
         let result = await failure(["overrides", "add", "2560x1440"])
         #expect(result?.message == "Error: " + (ResoluteError.needsRoot.errorDescription ?? ""))

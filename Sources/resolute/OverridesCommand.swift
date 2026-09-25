@@ -302,31 +302,35 @@ struct ResetOverride: AsyncParsableCommand, ContextCommand {
 /// An override as `overrides list` and `overrides show` print it.
 struct OverrideSummary: Encodable {
     struct Entry: Encodable {
+        /// "hidpi", "standard", or "preserved" for an element that names no mode.
         let kind: String
         let width: Int?
         let height: Int?
         let pixelWidth: Int?
         let pixelHeight: Int?
         let flags: String?
+        /// Written back byte for byte, in a form Resolute does not write itself.
+        let keptAsIs: Bool
         let summary: String
 
         init(_ entry: ScaleResolution) {
-            switch entry {
-            case .hiDPI(let width, let height, let flags):
+            switch entry.describedMode {
+            case .hiDPI(let width, let height, let flags)?:
                 kind = "hidpi"
                 self.width = width
                 self.height = height
                 pixelWidth = width * 2
                 pixelHeight = height * 2
-                self.flags = flags.description
-            case .standard(let width, let height):
+                // A kept 12-byte entry has one flags word, not the pair `flags` would show.
+                self.flags = entry.isEditable ? flags.description : nil
+            case .standard(let width, let height)?:
                 kind = "standard"
                 self.width = width
                 self.height = height
                 pixelWidth = width
                 pixelHeight = height
                 flags = nil
-            case .preserved:
+            case .preserved?, nil:
                 kind = "preserved"
                 width = nil
                 height = nil
@@ -334,6 +338,7 @@ struct OverrideSummary: Encodable {
                 pixelHeight = nil
                 flags = nil
             }
+            keptAsIs = !entry.isEditable
             summary = entry.summary
         }
     }
