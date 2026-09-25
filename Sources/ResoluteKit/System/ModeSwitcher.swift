@@ -1,0 +1,68 @@
+import CoreGraphics
+
+/// Switches display modes. A trial (used for hidden modes) is applied for the session
+/// first and saved only when someone confirms it; otherwise the previous mode returns.
+public struct ModeSwitcher: Sendable {
+    /// What to do with a mode on trial.
+    public enum Decision: Equatable, Sendable {
+        /// Save it, like a change made in System Settings.
+        case keep
+        /// Leave it until the user logs out.
+        case keepForSession
+        /// Go back to the previous mode.
+        case revert
+    }
+
+    /// How a switch ended.
+    public enum Outcome: Equatable, Sendable {
+        case alreadyCurrent
+        /// Saved without a trial.
+        case applied
+        case kept
+        case keptForSession
+        case reverted(to: Int32)
+    }
+
+    private let service: any DisplayControlling
+
+    public init(service: any DisplayControlling) {
+        self.service = service
+    }
+
+    /// Switches `displayID` to `modeID`. For a trial, `decide` is asked, after the switch,
+    /// whether to keep the mode.
+    public func apply(
+        modeID: Int32,
+        to displayID: CGDirectDisplayID,
+        trial: Bool,
+        decide: () -> Decision
+    ) throws -> Outcome {
+        // The full snapshot knows the current mode even when it is a hidden one.
+        let before = service.displays().first { $0.id == displayID }
+        let previous = before?.currentModeID ?? service.currentModeID(of: displayID)
+        guard previous != modeID else { return .alreadyCurrent }
+
+        try service.apply(modeID: modeID, to: displayID, scope: trial ? .session : .permanent)
+        guard trial else { return .applied }
+
+        switch decide() {
+        case .keep:
+            try service.apply(modeID: modeID, to: displayID, scope: .permanent)
+            return .kept
+        case .keepForSession:
+            return .keptForSession
+        case .revert:
+            let fallback = before?.modes.first { $0.origin == .system && $0.isDefault }?.modeID
+            for candidate in [previous, fallback].compactMap({ $0 }) where candidate != modeID {
+                do {
+                    // Undo the session change only; the saved setting was never touched.
+                    try service.apply(modeID: candidate, to: displayID, scope: .session)
+                    return .reverted(to: candidate)
+                } catch {
+                    continue
+                }
+            }
+            throw ResoluteError.revertFailed(display: before?.name ?? "the display")
+        }
+    }
+}

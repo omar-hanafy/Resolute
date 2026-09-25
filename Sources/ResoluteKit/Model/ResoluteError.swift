@@ -8,6 +8,7 @@ public enum ResoluteError: Error, Equatable, Sendable {
     case modeNotFound(String, suggestions: [String])
     case hiddenModeNeedsConfirmation(String)
     case currentModeUnknown(display: String)
+    case revertFailed(display: String)
     case coreGraphics(code: Int32, operation: String)
     case mirroringNeedsTwoDisplays
     case invalidResolution(String)
@@ -34,6 +35,8 @@ extension ResoluteError: LocalizedError {
                 : "No display mode matches \(query). Closest: \(suggestions.joined(separator: ", "))."
         case .hiddenModeNeedsConfirmation(let query):
             "\(query) is a hidden mode that macOS does not list. Pass --allow-hidden to use it."
+        case .revertFailed(let display):
+            "The previous mode of \(display) could not be restored. It comes back when you log out, or run `resolute set --default`."
         case .currentModeUnknown(let display):
             "The current mode of \(display) is unknown, so there is no resolution to keep. Give one, for example 1920x1080."
         case .coreGraphics(let code, let operation):

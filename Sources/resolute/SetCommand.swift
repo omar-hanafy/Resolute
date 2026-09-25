@@ -1,4 +1,5 @@
 import ArgumentParser
+import Foundation
 import ResoluteKit
 
 struct SetCommand: ParsableCommand {
@@ -35,7 +36,10 @@ struct SetCommand: ParsableCommand {
     @Flag(help: "Change the mode until you log out instead of permanently.")
     var session = false
 
-    @Flag(help: "Allow hidden modes that macOS does not list.")
+    @Flag(help: ArgumentHelp(
+        "Allow hidden modes that macOS does not list.",
+        discussion: "A hidden mode is tried until you log out. In a terminal you then have 15 seconds to type y to keep it; otherwise the previous mode comes back."
+    ))
     var allowHidden = false
 
     @Flag(help: "Show what would change without changing it.")
@@ -66,11 +70,41 @@ struct SetCommand: ParsableCommand {
             print("Would switch \(display.name) to \(Output.describe(mode)).")
             return
         }
-        try service.apply(modeID: mode.modeID, to: display.id, scope: session ? .session : .permanent)
-        if service.currentModeID(of: display.id) == mode.modeID {
-            print("\(display.name): \(Output.describe(mode))")
-        } else {
-            Output.printError("warning: macOS accepted the change but reports a different mode now.")
+        // Hidden modes are tried for the session and kept only when confirmed.
+        let trial = session || mode.origin == .hidden
+        let outcome = try ModeSwitcher(service: service).apply(modeID: mode.modeID, to: display.id, trial: trial) {
+            session ? .keepForSession : Self.askToKeep()
         }
+        switch outcome {
+        case .alreadyCurrent:
+            print("\(display.name) is already at \(Output.describe(mode)).")
+        case .applied, .kept, .keptForSession:
+            guard service.currentModeID(of: display.id) == mode.modeID else {
+                Output.printError("warning: macOS accepted the change but reports a different mode now.")
+                return
+            }
+            let until = outcome == .keptForSession ? " (until you log out)" : ""
+            print("\(display.name): \(Output.describe(mode))\(until)")
+        case .reverted(let modeID):
+            let restored = display.modes.first { $0.modeID == modeID }
+            print("Kept the previous mode: \(restored.map(Output.describe) ?? "mode \(modeID)").")
+        }
+    }
+
+    /// Asks in the terminal whether to keep a hidden mode. Without a terminal the mode
+    /// stays until the user logs out.
+    static func askToKeep(seconds: Int = 15) -> ModeSwitcher.Decision {
+        guard isatty(STDIN_FILENO) != 0 else {
+            Output.printError("note: no terminal to confirm in, so this mode lasts until you log out.")
+            return .keepForSession
+        }
+        let prompt = "Keep this display mode? Type y and press Return within \(seconds) seconds; anything else reverts: "
+        FileHandle.standardOutput.write(Data(prompt.utf8))
+        var input = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+        guard poll(&input, 1, Int32(seconds * 1_000)) > 0, let answer = readLine() else {
+            print("")
+            return .revert
+        }
+        return answer.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("y") ? .keep : .revert
     }
 }

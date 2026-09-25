@@ -122,3 +122,49 @@ enum TestData {
         )
     }
 }
+
+/// A display service that records what it is asked to do and can refuse chosen modes.
+final class FakeDisplayService: DisplayControlling, @unchecked Sendable {
+    struct Call: Equatable {
+        var modeID: Int32
+        var scope: ConfigurationScope
+    }
+
+    private let lock = NSLock()
+    private var display: Display
+    private let refusedModeIDs: Set<Int32>
+    private let reportsCurrentMode: Bool
+    private var recorded: [Call] = []
+
+    /// `reportsCurrentMode: false` makes `currentModeID(of:)` return nil, as CoreGraphics
+    /// can for a hidden mode, while `displays()` still knows it.
+    init(display: Display, refusing refusedModeIDs: Set<Int32> = [], reportsCurrentMode: Bool = true) {
+        self.display = display
+        self.refusedModeIDs = refusedModeIDs
+        self.reportsCurrentMode = reportsCurrentMode
+    }
+
+    var calls: [Call] {
+        lock.withLock { recorded }
+    }
+
+    func displays() -> [Display] {
+        lock.withLock { [display] }
+    }
+
+    func currentModeID(of displayID: CGDirectDisplayID) -> Int32? {
+        lock.withLock { reportsCurrentMode ? display.currentModeID : nil }
+    }
+
+    func apply(modeID: Int32, to displayID: CGDirectDisplayID, scope: ConfigurationScope) throws {
+        try lock.withLock {
+            guard !refusedModeIDs.contains(modeID) else {
+                throw ResoluteError.coreGraphics(code: 1001, operation: "select the display mode")
+            }
+            recorded.append(Call(modeID: modeID, scope: scope))
+            display.currentModeID = modeID
+        }
+    }
+
+    func setMirroring(_ enabled: Bool) throws {}
+}
