@@ -21,11 +21,12 @@ final class CustomResolutionsModel {
         }
     }
 
-    /// A row in the resolutions table.
+    /// A row in the resolutions table, identified by its entry, which is unique in a list:
+    /// a position would name another entry once the list is re-sorted or reverted.
     struct Row: Identifiable, Hashable {
-        var id: Int
         var entry: ScaleResolution
 
+        var id: ScaleResolution { entry }
         var resolution: String { entry.sizeText }
         var kind: String { entry.kindText }
         var pixels: String { entry.pixelSize.map { "\($0.width) × \($0.height)" } ?? "—" }
@@ -43,7 +44,16 @@ final class CustomResolutionsModel {
 
     private(set) var targets: [Target] = []
     private(set) var selection: OverrideKey?
-    private(set) var draft: OverrideDraft?
+    private(set) var draft: OverrideDraft? {
+        // An entry that is gone leaves the selection, or adding it back would select it.
+        didSet {
+            let listed = selectedEntries.intersection(draft?.working.resolutions ?? [])
+            if listed != selectedEntries { selectedEntries = listed }
+        }
+    }
+    /// The entries selected in the table. Cleared whenever a list is read or reverted, so
+    /// it never carries over to entries that merely look the same.
+    var selectedEntries = Set<ScaleResolution>()
     private(set) var source: OverrideStore.Source = .missing
     private(set) var isWorking = false
     /// A display someone picked while the current one has unsaved changes.
@@ -66,7 +76,7 @@ final class CustomResolutionsModel {
     }
 
     var rows: [Row] {
-        (draft?.working.resolutions ?? []).enumerated().map { Row(id: $0.offset, entry: $0.element) }
+        (draft?.working.resolutions ?? []).map { Row(entry: $0) }
     }
 
     var selectedTarget: Target? {
@@ -159,6 +169,7 @@ final class CustomResolutionsModel {
     }
 
     private func load() {
+        selectedEntries = []
         guard let selection else {
             draft = nil
             return
@@ -186,15 +197,18 @@ final class CustomResolutionsModel {
         }
     }
 
-    func remove(rows ids: Set<Int>) {
+    /// Removes exactly the selected entries, and the 1× entries this edit added with them.
+    func removeSelection() {
         guard !isWorking else { return }
-        let entries = rows.filter { ids.contains($0.id) }.map(\.entry)
-        draft?.remove(entries)
+        // Read before `draft?.remove` begins changing the draft.
+        let selected = rows.map(\.entry).filter(selectedEntries.contains)
+        draft?.remove(selected)
     }
 
     func revert() {
         guard !isWorking else { return }
         draft?.revert()
+        selectedEntries = []
     }
 
     func save() async {

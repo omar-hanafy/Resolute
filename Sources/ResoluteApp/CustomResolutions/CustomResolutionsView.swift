@@ -94,7 +94,6 @@ private struct TargetRow: View {
 
 private struct OverrideEditor: View {
     @Bindable var model: CustomResolutionsModel
-    @State private var tableSelection = Set<Int>()
     @State private var isAdding = false
     @State private var isConfirmingRemoval = false
 
@@ -115,7 +114,7 @@ private struct OverrideEditor: View {
                     .textFieldStyle(.roundedBorder)
             }
 
-            Table(model.rows, selection: $tableSelection) {
+            Table(model.rows, selection: $model.selectedEntries) {
                 TableColumn("Resolution") { row in Text(row.resolution).monospacedDigit() }
                 TableColumn("Type") { row in Text(row.kind) }
                     .width(min: 60, ideal: 80)
@@ -142,12 +141,11 @@ private struct OverrideEditor: View {
                     Label("Add Resolution", systemImage: "plus")
                 }
                 Button {
-                    model.remove(rows: tableSelection)
-                    tableSelection.removeAll()
+                    model.removeSelection()
                 } label: {
                     Label("Remove", systemImage: "minus")
                 }
-                .disabled(tableSelection.isEmpty)
+                .disabled(model.selectedEntries.isEmpty)
                 Spacer()
             }
 
@@ -184,9 +182,6 @@ private struct OverrideEditor: View {
             Button("Remove Override", role: .destructive) { Task { await model.removeOverride() } }
         } message: {
             Text("macOS goes back to the display's default resolutions after you reconnect it or restart. A backup is kept.")
-        }
-        .onChange(of: model.selection) {
-            tableSelection.removeAll()
         }
     }
 }

@@ -70,6 +70,19 @@ struct GatedRunner: CommandRunning {
         return url
     }
 
+    func write(_ override: DisplayOverride, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try override.propertyListData().write(to: url)
+    }
+
+    /// Writes `override` where the staged store looks for an installed one.
+    func install(_ override: DisplayOverride, under root: URL) throws {
+        try write(override, to: OverrideLocations.staged(at: root).userFile(for: override.key))
+    }
+
+    let hd = ScaleResolution.hiDPI(width: 1920, height: 1080, flags: .standard)
+    let qhd = ScaleResolution.hiDPI(width: 2560, height: 1440, flags: .standard)
+
     @Test func switchesFreelyWithoutChanges() throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -144,6 +157,75 @@ struct GatedRunner: CommandRunning {
         #expect(!model.hasChanges)
         let stored = try OverrideStore(locations: .staged(at: root)).installedOverride(for: OverrideKey(display: first))
         #expect(stored?.resolutions == written.resolutions)
+    }
+
+    // MARK: - Selection
+
+    /// Rows used to be selected by position, so once an add re-sorted the list the
+    /// selection sat on another entry, and Remove deleted that one.
+    @Test func removesTheSelectedEntryAfterTheListIsResorted() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        _ = model.add(hd)
+        model.selectedEntries = [hd]
+        _ = model.add(qhd)
+        #expect(model.rows.map(\.entry) == [
+            .standard(width: 5120, height: 2880), .standard(width: 3840, height: 2160), qhd, hd,
+        ])
+        #expect(model.selectedEntries == [hd])
+
+        model.removeSelection()
+        // The 1× partner added with the entry goes with it; nothing else does.
+        #expect(model.rows.map(\.entry) == [.standard(width: 5120, height: 2880), qhd])
+        #expect(model.selectedEntries.isEmpty)
+    }
+
+    @Test func revertClearsTheSelection() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let native = ScaleResolution.standard(width: 2560, height: 1440)
+        try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [native]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        _ = model.add(hd)
+        model.selectedEntries = [native, hd]
+
+        model.revert()
+        #expect(model.selectedEntries.isEmpty)
+        model.removeSelection()
+        #expect(model.rows.map(\.entry) == [native])
+    }
+
+    @Test func switchingDisplaysClearsTheSelection() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for display in [first, second] {
+            try install(DisplayOverride(key: OverrideKey(display: display), resolutions: [hd]), under: root)
+        }
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        model.selectedEntries = [hd]
+
+        model.requestSelection(OverrideKey(display: second))
+        #expect(model.selectedEntries.isEmpty)
+        model.removeSelection()
+        #expect(model.rows.map(\.entry) == [hd])
+    }
+
+    /// After Remove Override… the list is read again, here from Apple's file, which has
+    /// the entry that was selected.
+    @Test func readingTheOverrideAgainClearsTheSelection() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = OverrideKey(display: first)
+        try write(DisplayOverride(key: key, resolutions: [hd]), to: OverrideLocations.staged(at: root).systemFile(for: key))
+        try install(DisplayOverride(key: key, resolutions: [qhd, hd]), under: root)
+        let model = makeModel(root: root, displays: StubDisplays([first, second]))
+        model.selectedEntries = [hd]
+
+        await model.removeOverride()
+        #expect(model.source == .system)
+        #expect(model.rows.map(\.entry) == [hd])
+        #expect(model.selectedEntries.isEmpty)
     }
 }
 
