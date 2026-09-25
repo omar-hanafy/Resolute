@@ -31,7 +31,7 @@ make install
 
 If you used RDM, quit it and remove it from System Settings › General › Login Items. Resolute reads the override files RDM wrote.
 
-To uninstall, run `make uninstall`. It turns off Launch at Login, then removes the app and the command-line link.
+To uninstall, run `make uninstall`. It quits the app, turns off Launch at Login, then removes the app and the command-line link. (An app older than 0.2 can't turn Launch at Login off for it, so the script says where to do that.)
 
 ## The menu
 

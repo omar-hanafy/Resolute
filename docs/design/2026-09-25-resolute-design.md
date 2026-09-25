@@ -175,8 +175,8 @@ Makefile                     build / test / app / install / uninstall / clean
   points = pixels / 2, flags kept); anything else (12/9-byte, non-HiDPI 16-byte,
   non-data) → preserved verbatim, shown read-only. Every entry is listed and written
   back exactly as listed: standard entries, then HiDPI entries, each sorted by width then
-  height, descending, then preserved entries in their original order, so a file reads
-  back the way it was saved. Adding a HiDPI entry also adds a standard entry at its pixel
+  height, descending (a kept 12-byte entry sorts with the mode it names), then the other
+  preserved entries in their original order, so a file reads back the way it was saved. Adding a HiDPI entry also adds a standard entry at its pixel
   size (RDM's pairing) unless one is listed; removing the HiDPI entry removes that
   partner only when the same edit added it, because a file cannot say why a standard
   entry is there (see Revisions). New HiDPI entries use flags `0x00000009 / 0x00A00000`
