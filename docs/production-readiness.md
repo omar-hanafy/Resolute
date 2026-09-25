@@ -81,6 +81,8 @@ The final local automated run reported **456 tests with eight explicit skips and
 
 ## Public beta publication — 2026-09-25
 
-The repository is public and [0.3.0 is published as a prerelease](https://github.com/omar-hanafy/Resolute/releases/tag/v0.3.0). Its ZIP, DMG and checksums remain the reviewed build 151 from `150fdce`; this publication documentation does not change the binaries. The beta remains ad hoc signed and not notarized, with the hardware and privilege-integration limits above unchanged.
+The repository is public and [0.3.0 beta 1 is published as a prerelease](https://github.com/omar-hanafy/Resolute/releases/tag/v0.3.0-beta.1). Its ZIP, DMG and checksums remain the reviewed build 151 from `150fdce`; this publication documentation does not change the binaries. The beta remains ad hoc signed and not notarized, with the hardware and privilege-integration limits above unchanged.
 
 GitHub private vulnerability reporting is enabled. See [SECURITY.md](../SECURITY.md) for the verified reporting channel. Public pushes and pull requests now trigger the configured CI automatically.
+
+The public beta uses `v0.3.0-beta.1`, explicitly pointing to packaging commit `150fdce`. The pre-existing `v0.3.0` tag points to an older development commit and was preserved; it must not be used to identify the beta binaries. Archive filenames and the app version remain 0.3.0, build 151.
