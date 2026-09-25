@@ -1,7 +1,7 @@
 import ArgumentParser
 import ResoluteKit
 
-struct ModesCommand: ParsableCommand {
+struct ModesCommand: ParsableCommand, ContextCommand {
     static let configuration = CommandConfiguration(
         commandName: "modes",
         abstract: "List a display's modes.",
@@ -20,20 +20,24 @@ struct ModesCommand: ParsableCommand {
     var json = false
 
     func run() throws {
-        let display = try target.resolve(in: SystemDisplayService().displays())
+        try run(in: .live)
+    }
+
+    func run(in context: CommandContext) throws {
+        let display = try target.resolve(in: context.service.displays())
         let modes = display.modes.filter { all || $0.origin == .system }
         if json {
-            print(try Output.json(modes))
+            context.write(try Output.json(modes))
             return
         }
-        print("\(display.name): \(modes.count) modes\(Self.hiddenNote(for: display, all: all))")
+        context.write("\(display.name): \(modes.count) modes\(Self.hiddenNote(for: display, all: all))")
         if raw {
-            print(Self.rawTable(modes, currentModeID: display.currentModeID))
+            context.write(Self.rawTable(modes, currentModeID: display.currentModeID))
             return
         }
         let currentKey = ModeCatalog.currentKey(for: display)
         for section in ModeCatalog.sections(for: display, includeLowResolution: true, includeHidden: all) {
-            print("  \(section.kind.title)")
+            context.write("  \(section.kind.title)")
             let rows = section.groups.map { group -> [String] in
                 let isCurrent = group.key == currentKey
                 let rates = group.refreshRates.filter { $0 > 0 }.map { rate -> String in
@@ -51,7 +55,7 @@ struct ModesCommand: ParsableCommand {
                     notes.joined(separator: ", "),
                 ]
             }
-            print(Output.table(rows, indent: "  "))
+            context.write(Output.table(rows, indent: "  "))
         }
     }
 

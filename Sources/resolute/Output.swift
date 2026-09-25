@@ -48,8 +48,4 @@ enum Output {
     static func hex(_ value: UInt32) -> String {
         String(value, radix: 16)
     }
-
-    static func printError(_ message: String) {
-        FileHandle.standardError.write(Data((message + "\n").utf8))
-    }
 }

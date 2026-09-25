@@ -1,7 +1,7 @@
 import ArgumentParser
 import ResoluteKit
 
-struct DisplaysCommand: ParsableCommand {
+struct DisplaysCommand: ParsableCommand, ContextCommand {
     static let configuration = CommandConfiguration(
         commandName: "displays",
         abstract: "List online displays and their current modes."
@@ -11,10 +11,14 @@ struct DisplaysCommand: ParsableCommand {
     var json = false
 
     func run() throws {
-        let displays = SystemDisplayService().displays()
+        try run(in: .live)
+    }
+
+    func run(in context: CommandContext) throws {
+        let displays = context.service.displays()
         guard !displays.isEmpty else { throw ResoluteError.noDisplays }
         if json {
-            print(try Output.json(displays.enumerated().map { DisplaySummary(index: $0.offset, display: $0.element) }))
+            context.write(try Output.json(displays.enumerated().map { DisplaySummary(index: $0.offset, display: $0.element) }))
             return
         }
         for (index, display) in displays.enumerated() {
@@ -22,8 +26,8 @@ struct DisplaysCommand: ParsableCommand {
             if display.isMain { traits.append("main") }
             if display.isBuiltin { traits.append("built-in") }
             if display.isInMirrorSet { traits.append("mirrored") }
-            print("\(index)  \(display.name)  (\(traits.joined(separator: ", ")))")
-            print("   " + (display.currentMode.map(Output.describe) ?? "current mode unknown"))
+            context.write("\(index)  \(display.name)  (\(traits.joined(separator: ", ")))")
+            context.write("   " + (display.currentMode.map(Output.describe) ?? "current mode unknown"))
         }
     }
 }

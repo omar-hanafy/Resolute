@@ -24,8 +24,8 @@ struct LocationOptions: ParsableArguments {
         root.map { OverrideLocations.staged(at: URL(filePath: $0, directoryHint: .isDirectory)) } ?? .standard
     }
 
-    func installer() throws -> OverrideInstaller {
-        guard root != nil || geteuid() == 0 else { throw ResoluteError.needsRoot }
+    func installer(in context: CommandContext) throws -> OverrideInstaller {
+        guard root != nil || context.isRoot else { throw ResoluteError.needsRoot }
         return OverrideInstaller(locations: locations, runner: ShellCommandRunner())
     }
 }
@@ -50,14 +50,14 @@ struct OverrideTargetOptions: ParsableArguments {
         }
     }
 
-    func key() throws -> OverrideKey {
+    func key(in context: CommandContext) throws -> OverrideKey {
         if let vendor, let product {
             guard let vendorID = Self.hex(vendor), let productID = Self.hex(product) else {
                 throw ValidationError("--vendor and --product take hexadecimal IDs, for example db4 and 3401.")
             }
             return OverrideKey(vendorID: vendorID, productID: productID)
         }
-        let displays = SystemDisplayService().displays()
+        let displays = context.service.displays()
         return OverrideKey(display: try DisplaySelector(display ?? "main").resolve(in: displays))
     }
 
@@ -79,7 +79,7 @@ struct EntryOptions: ParsableArguments {
     }
 }
 
-struct ListOverrides: ParsableCommand {
+struct ListOverrides: ParsableCommand, ContextCommand {
     static let configuration = CommandConfiguration(commandName: "list", abstract: "List installed overrides.")
 
     @OptionGroup var location: LocationOptions
@@ -88,24 +88,28 @@ struct ListOverrides: ParsableCommand {
     var json = false
 
     func run() throws {
+        try run(in: .live)
+    }
+
+    func run(in context: CommandContext) throws {
         let store = OverrideStore(locations: location.locations)
-        let displays = SystemDisplayService().displays()
+        let displays = context.service.displays()
         let summaries = store.installedKeys().map { key in
             OverrideSummary(key: key, store: store, display: displays.first { OverrideKey(display: $0) == key })
         }
         if json {
-            print(try Output.json(summaries))
+            context.write(try Output.json(summaries))
             return
         }
         guard !summaries.isEmpty else {
-            print("No overrides in \(store.locations.userRoot.path(percentEncoded: false))")
+            context.write("No overrides in \(store.locations.userRoot.path(percentEncoded: false))")
             return
         }
-        summaries.forEach { $0.printText() }
+        summaries.forEach { context.write($0.text) }
     }
 }
 
-struct ShowOverride: ParsableCommand {
+struct ShowOverride: ParsableCommand, ContextCommand {
     static let configuration = CommandConfiguration(
         commandName: "show",
         abstract: "Show the override for a display (the installed one, else the one macOS ships)."
@@ -118,20 +122,20 @@ struct ShowOverride: ParsableCommand {
     var json = false
 
     func run() throws {
-        let key = try target.key()
+        try run(in: .live)
+    }
+
+    func run(in context: CommandContext) throws {
+        let key = try target.key(in: context)
         let store = OverrideStore(locations: location.locations)
         let (override, source) = try store.editableOverride(for: key)
-        let display = SystemDisplayService().displays().first { OverrideKey(display: $0) == key }
+        let display = context.service.displays().first { OverrideKey(display: $0) == key }
         let summary = OverrideSummary(key: key, override: override, source: source, locations: store.locations, display: display)
-        if json {
-            print(try Output.json(summary))
-        } else {
-            summary.printText()
-        }
+        context.write(json ? try Output.json(summary) : summary.text)
     }
 }
 
-struct AddResolution: AsyncParsableCommand {
+struct AddResolution: AsyncParsableCommand, ContextCommand {
     static let configuration = CommandConfiguration(commandName: "add", abstract: "Add a custom resolution to a display's override.")
 
     @OptionGroup var entry: EntryOptions
@@ -143,18 +147,22 @@ struct AddResolution: AsyncParsableCommand {
     @OptionGroup var location: LocationOptions
 
     func run() async throws {
-        let installer = try location.installer()
-        let key = try target.key()
+        try await run(in: .live)
+    }
+
+    func run(in context: CommandContext) async throws {
+        let installer = try location.installer(in: context)
+        let key = try target.key(in: context)
         var draft = OverrideDraft(try OverrideStore(locations: location.locations).editableOverride(for: key).override)
         let newEntry = try entry.entry(flags: try flags.map { try HiDPIFlags(parsing: $0) })
         try draft.add(newEntry)
         let url = try await installer.install(draft.working)
-        print("Added \(newEntry.summary) to \(url.path(percentEncoded: false))")
-        print("Reconnect the display or restart the Mac to use it.")
+        context.write("Added \(newEntry.summary) to \(url.path(percentEncoded: false))")
+        context.write("Reconnect the display or restart the Mac to use it.")
     }
 }
 
-struct RemoveResolution: AsyncParsableCommand {
+struct RemoveResolution: AsyncParsableCommand, ContextCommand {
     static let configuration = CommandConfiguration(commandName: "remove", abstract: "Remove a custom resolution from a display's override.")
 
     @OptionGroup var entry: EntryOptions
@@ -162,8 +170,12 @@ struct RemoveResolution: AsyncParsableCommand {
     @OptionGroup var location: LocationOptions
 
     func run() async throws {
-        let installer = try location.installer()
-        let key = try target.key()
+        try await run(in: .live)
+    }
+
+    func run(in context: CommandContext) async throws {
+        let installer = try location.installer(in: context)
+        let key = try target.key(in: context)
         guard let installed = try OverrideStore(locations: location.locations).installedOverride(for: key) else {
             throw ResoluteError.invalidEntry("There is no installed override for \(key).")
         }
@@ -175,11 +187,11 @@ struct RemoveResolution: AsyncParsableCommand {
         }
         draft.remove(matches)
         let url = try await installer.install(draft.working)
-        print("Removed \(unwanted.sizeText) (\(unwanted.kindText)) from \(url.path(percentEncoded: false))")
+        context.write("Removed \(unwanted.sizeText) (\(unwanted.kindText)) from \(url.path(percentEncoded: false))")
     }
 }
 
-struct ResetOverride: AsyncParsableCommand {
+struct ResetOverride: AsyncParsableCommand, ContextCommand {
     static let configuration = CommandConfiguration(
         commandName: "reset",
         abstract: "Delete a display's override so macOS uses its default resolutions."
@@ -189,10 +201,14 @@ struct ResetOverride: AsyncParsableCommand {
     @OptionGroup var location: LocationOptions
 
     func run() async throws {
-        let installer = try location.installer()
-        let key = try target.key()
+        try await run(in: .live)
+    }
+
+    func run(in context: CommandContext) async throws {
+        let installer = try location.installer(in: context)
+        let key = try target.key(in: context)
         try await installer.remove(key)
-        print("Removed the override for \(key). Backups are in \(installer.locations.backupRoot.path(percentEncoded: false))")
+        context.write("Removed the override for \(key). Backups are in \(installer.locations.backupRoot.path(percentEncoded: false))")
     }
 }
 
@@ -279,17 +295,18 @@ struct OverrideSummary: Encodable {
         }
     }
 
-    func printText() {
-        print(path)
+    var text: String {
         let origin = switch source {
         case "installed": "installed"
         case "macOS": "shipped with macOS, not installed"
         default: "no override yet"
         }
-        print("  vendor \(vendorID), product \(productID), \(connectedDisplay.map { "connected: \($0)" } ?? "not connected"), \(origin)")
-        if let productName { print("  name: \(productName)") }
-        if let problem { print("  problem: \(problem)") }
-        if entries.isEmpty { print("  no custom resolutions") }
-        for entry in entries { print("  • \(entry.summary)") }
+        var lines = [path]
+        lines.append("  vendor \(vendorID), product \(productID), \(connectedDisplay.map { "connected: \($0)" } ?? "not connected"), \(origin)")
+        if let productName { lines.append("  name: \(productName)") }
+        if let problem { lines.append("  problem: \(problem)") }
+        if entries.isEmpty { lines.append("  no custom resolutions") }
+        lines += entries.map { "  • \($0.summary)" }
+        return lines.joined(separator: "\n")
     }
 }

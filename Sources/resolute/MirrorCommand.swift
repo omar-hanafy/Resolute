@@ -1,7 +1,7 @@
 import ArgumentParser
 import ResoluteKit
 
-struct MirrorCommand: ParsableCommand {
+struct MirrorCommand: ParsableCommand, ContextCommand {
     enum State: String, ExpressibleByArgument, CaseIterable {
         case on, off, toggle, status
     }
@@ -15,18 +15,22 @@ struct MirrorCommand: ParsableCommand {
     var state: State = .status
 
     func run() throws {
-        let service = SystemDisplayService()
+        try run(in: .live)
+    }
+
+    func run(in context: CommandContext) throws {
+        let service = context.service
         let mirroring = service.displays().contains(where: \.isInMirrorSet)
         let enable: Bool
         switch state {
         case .status:
-            print(mirroring ? "Mirroring is on." : "Mirroring is off.")
+            context.write(mirroring ? "Mirroring is on." : "Mirroring is off.")
             return
         case .on: enable = true
         case .off: enable = false
         case .toggle: enable = !mirroring
         }
         try service.setMirroring(enable)
-        print(enable ? "Mirroring is on." : "Mirroring is off.")
+        context.write(enable ? "Mirroring is on." : "Mirroring is off.")
     }
 }

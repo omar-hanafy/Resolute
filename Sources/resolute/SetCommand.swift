@@ -2,7 +2,7 @@ import ArgumentParser
 import Foundation
 import ResoluteKit
 
-struct SetCommand: ParsableCommand {
+struct SetCommand: ParsableCommand, ContextCommand {
     static let configuration = CommandConfiguration(
         commandName: "set",
         abstract: "Switch a display to another mode.",
@@ -52,7 +52,11 @@ struct SetCommand: ParsableCommand {
     }
 
     func run() throws {
-        let service = SystemDisplayService()
+        try run(in: .live)
+    }
+
+    func run(in context: CommandContext) throws {
+        let service = context.service
         let display = try target.resolve(in: service.displays())
         var query = try resolution.map { try ModeQuery(resolution: $0) } ?? ModeQuery()
         if let scale { query.scale = scale }
@@ -63,31 +67,31 @@ struct SetCommand: ParsableCommand {
 
         let mode = try query.resolve(on: display)
         guard mode.modeID != display.currentModeID else {
-            print("\(display.name) is already at \(Output.describe(mode)).")
+            context.write("\(display.name) is already at \(Output.describe(mode)).")
             return
         }
         guard !dryRun else {
-            print("Would switch \(display.name) to \(Output.describe(mode)).")
+            context.write("Would switch \(display.name) to \(Output.describe(mode)).")
             return
         }
         // Hidden modes are tried for the session and kept only when confirmed.
         let trial = session || mode.origin == .hidden
         let outcome = try ModeSwitcher(service: service).apply(modeID: mode.modeID, to: display.id, trial: trial) {
-            session ? .keepForSession : Self.askToKeep()
+            session ? .keepForSession : context.confirmHiddenMode()
         }
         switch outcome {
         case .alreadyCurrent:
-            print("\(display.name) is already at \(Output.describe(mode)).")
+            context.write("\(display.name) is already at \(Output.describe(mode)).")
         case .applied, .kept, .keptForSession:
             guard service.currentModeID(of: display.id) == mode.modeID else {
-                Output.printError("warning: macOS accepted the change but reports a different mode now.")
+                context.writeError("warning: macOS accepted the change but reports a different mode now.")
                 return
             }
             let until = outcome == .keptForSession ? " (until you log out)" : ""
-            print("\(display.name): \(Output.describe(mode))\(until)")
+            context.write("\(display.name): \(Output.describe(mode))\(until)")
         case .reverted(let modeID):
             let restored = display.modes.first { $0.modeID == modeID }
-            print("Kept the previous mode: \(restored.map(Output.describe) ?? "mode \(modeID)").")
+            context.write("Kept the previous mode: \(restored.map(Output.describe) ?? "mode \(modeID)").")
         }
     }
 
@@ -95,7 +99,7 @@ struct SetCommand: ParsableCommand {
     /// stays until the user logs out.
     static func askToKeep(seconds: Int = 15) -> ModeSwitcher.Decision {
         guard isatty(STDIN_FILENO) != 0 else {
-            Output.printError("note: no terminal to confirm in, so this mode lasts until you log out.")
+            FileHandle.standardError.write(Data("note: no terminal to confirm in, so this mode lasts until you log out.\n".utf8))
             return .keepForSession
         }
         let prompt = "Keep this display mode? Type y and press Return within \(seconds) seconds; anything else reverts: "
