@@ -129,7 +129,10 @@ struct SetCommand: ParsableCommand, ContextCommand {
         case .applied, .kept, .keptForSession:
             // The full snapshot, since CoreGraphics may not name a hidden mode in use.
             guard switcher.currentModeID(of: display.id) == mode.modeID else {
-                context.writeError("warning: macOS accepted the change but reports a different mode now.")
+                let isGone = !service.displays().contains { $0.id == display.id }
+                context.writeError(isGone
+                    ? "warning: \(display.name) went away, so its new mode could not be checked."
+                    : "warning: macOS accepted the change but reports a different mode now.")
                 return
             }
             let until = outcome == .keptForSession ? " (until you log out)" : ""
@@ -138,8 +141,27 @@ struct SetCommand: ParsableCommand, ContextCommand {
             let restored = display.modes.first { $0.modeID == modeID }
             context.write("Kept the previous mode: \(restored.map(Output.describe) ?? "mode \(modeID)").")
         case .restorePending(let pending):
-            throw ResoluteError.revertFailed(display: pending.displayName)
+            let modeID = try Self.finishRestore(pending, with: switcher, in: context)
+            let restored = display.modes.first { $0.modeID == modeID }
+            context.write("\(pending.displayName) is back. Restored the previous mode: \(restored.map(Output.describe) ?? "mode \(modeID)").")
         }
+    }
+
+    /// Waits for a display that went away during a trial to come back, then puts its
+    /// previous mode back and returns it. A command gets no display notifications, so it
+    /// looks every `restorePollInterval` until `restoreTimeout`.
+    static func finishRestore(
+        _ pending: ModeSwitcher.PendingRestore, with switcher: ModeSwitcher, in context: CommandContext
+    ) throws -> Int32 {
+        context.writeError("\(pending.displayName) went away. Waiting for it to come back to restore the previous mode…")
+        let deadline = ContinuousClock.now + .seconds(context.restoreTimeout)
+        while true {
+            if case .restored(let modeID) = try switcher.finish(pending) { return modeID }
+            guard ContinuousClock.now < deadline else { break }
+            Thread.sleep(forTimeInterval: context.restorePollInterval)
+        }
+        switcher.giveUp(on: pending, after: .seconds(context.restoreTimeout))
+        throw ResoluteError.displayDidNotReturn(display: pending.displayName)
     }
 
     /// Asks in the terminal whether to keep a hidden mode. Without a terminal the mode

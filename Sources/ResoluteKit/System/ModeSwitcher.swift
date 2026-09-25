@@ -130,6 +130,14 @@ public struct ModeSwitcher: Sendable {
         return .restored(to: modeID)
     }
 
+    /// Notes that `pending` will not be finished: its display stayed away for `wait`.
+    public func giveUp(on pending: PendingRestore, after wait: Duration) {
+        Self.log.error("""
+            \(pending.displayName, privacy: .public) did not come back within \(wait.components.seconds) seconds, \
+            so mode \(pending.modeID) was not put back
+            """)
+    }
+
     /// What undoing a trial of `modeID` puts back: the mode in use before, else the default
     /// one. Nil when neither is known.
     private static func restore(

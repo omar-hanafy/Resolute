@@ -27,6 +27,8 @@ public enum ResoluteError: Error, Equatable, Sendable {
     case usage(String)
     /// The person kept a mode on trial, but the display went away before it was saved.
     case displayWentAway(display: String)
+    /// A display went away during a trial and did not come back in time to be reverted.
+    case displayDidNotReturn(display: String)
 }
 
 extension ResoluteError: LocalizedError {
@@ -80,6 +82,8 @@ extension ResoluteError: LocalizedError {
             "Writing display overrides needs administrator rights. Run the command with sudo, or use the Resolute app."
         case .displayWentAway(let display):
             "\(display) went away before the new mode could be saved, so it was not saved. If the display comes back in that mode, it lasts until you log out."
+        case .displayDidNotReturn(let display):
+            "\(display) has not come back, so its previous mode could not be restored. It comes back when you log out, or run `resolute set --default`."
         }
     }
 }
