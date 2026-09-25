@@ -1,9 +1,12 @@
 import CoreGraphics
 import Foundation
+import os
 
 /// Switches display modes. A trial (used for hidden modes) is applied for the session
 /// first and saved only when someone confirms it; otherwise the previous mode returns.
 public struct ModeSwitcher: Sendable {
+    private static let log = ResoluteLog.modes
+
     /// What to do with a mode on trial.
     public enum Decision: Equatable, Sendable {
         /// Save it, like a change made in System Settings.
@@ -42,24 +45,37 @@ public struct ModeSwitcher: Sendable {
         let before = service.displays().first { $0.id == displayID }
         let previous = before?.currentModeID ?? service.currentModeID(of: displayID)
         guard previous != modeID else { return .alreadyCurrent }
+        let name = before?.name ?? "Display \(displayID)"
+        let scope: ConfigurationScope = trial ? .session : .permanent
+        let from = previous.map { "mode \($0)" } ?? "an unknown mode"
+        Self.log.notice("""
+            Switching \(name, privacy: .public) (display \(displayID)) from \(from, privacy: .public) \
+            to mode \(modeID), scope \(scope.rawValue, privacy: .public)\(trial ? ", on trial" : "", privacy: .public)
+            """)
 
-        try service.apply(modeID: modeID, to: displayID, scope: trial ? .session : .permanent)
+        try service.apply(modeID: modeID, to: displayID, scope: scope)
         guard trial else { return .applied }
         // SkyLight reports no errors, so check that a hidden mode really took before asking
         // whether to keep it; CoreGraphics reports its own failures for listed modes.
         let isListed = before?.modes.first { $0.modeID == modeID }?.origin == .system
-        if !isListed, !waitUntilCurrent(modeID, on: displayID) {
-            // Put the previous mode back in case the switch lands after all; when it never
-            // happened this changes nothing.
-            _ = try restore(before: before, previous: previous, leaving: modeID, on: displayID)
-            throw ResoluteError.modeNotApplied(display: before?.name ?? "The display")
+        if !isListed {
+            guard waitUntilCurrent(modeID, on: displayID) else {
+                Self.log.error("\(name, privacy: .public) did not report mode \(modeID) within half a second")
+                // Put the previous mode back in case the switch lands after all; when it never
+                // happened this changes nothing.
+                _ = try restore(before: before, previous: previous, leaving: modeID, on: displayID)
+                throw ResoluteError.modeNotApplied(display: before?.name ?? "The display")
+            }
+            Self.log.info("\(name, privacy: .public) reports mode \(modeID); asking whether to keep it")
         }
 
         switch decide() {
         case .keep:
             try service.apply(modeID: modeID, to: displayID, scope: .permanent)
+            Self.log.notice("Kept mode \(modeID) on \(name, privacy: .public)")
             return .kept
         case .keepForSession:
+            Self.log.notice("Kept mode \(modeID) on \(name, privacy: .public) until logout")
             return .keptForSession
         case .revert:
             return .reverted(to: try restore(before: before, previous: previous, leaving: modeID, on: displayID))
@@ -74,13 +90,18 @@ public struct ModeSwitcher: Sendable {
         leaving modeID: Int32,
         on displayID: CGDirectDisplayID
     ) throws -> Int32 {
+        let name = before?.name ?? "Display \(displayID)"
         let fallback = before?.modes.first { $0.origin == .system && $0.isDefault }?.modeID
         for candidate in [previous, fallback].compactMap({ $0 }) where candidate != modeID {
             do {
                 try service.apply(modeID: candidate, to: displayID, scope: .session)
+                Self.log.notice("Put mode \(candidate) back on \(name, privacy: .public) for the session")
                 return candidate
             } catch {
-                continue
+                Self.log.error("""
+                    Could not put mode \(candidate) back on \(name, privacy: .public): \
+                    \(error.localizedDescription, privacy: .public)
+                    """)
             }
         }
         throw ResoluteError.revertFailed(display: before?.name ?? "the display")
