@@ -76,11 +76,10 @@ import Testing
 @Suite struct OfflineDisplayTests {
     let offline: CGDirectDisplayID = 0x5E5E_5E5E
 
-    /// CoreGraphics answers -1 for an ID it has never seen, which is not 0, and 0 for a
-    /// display that went away.
+    /// On macOS 27 CoreGraphics answers -1 for an ID it has never seen, which is not 0, and
+    /// 0 for a display that went away.
     @Test func countsOnlyAPositiveAnswerAsOnline() throws {
         try #require(!SystemDisplayService.onlineDisplayIDs().contains(offline))
-        #expect(CGDisplayIsOnline(offline) != 0)
         #expect(!SystemDisplayService.isOnline(offline))
         for id in SystemDisplayService.onlineDisplayIDs() {
             #expect(SystemDisplayService.isOnline(id))
