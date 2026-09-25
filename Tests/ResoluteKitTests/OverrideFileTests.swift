@@ -241,3 +241,32 @@ import Testing
         #expect(AspectRatio.presets.map(\.description) == ["16:9", "16:10", "21:9", "32:9", "64:27", "4:3", "3:2"])
     }
 }
+
+@Suite struct ScaleResolutionParsingTests {
+    @Test func readsTheScaleSuffix() throws {
+        #expect(try ScaleResolution(parsing: "1680x1050@1x") == .standard(width: 1680, height: 1050))
+        #expect(try ScaleResolution(parsing: "1680x1050@2x") == .hiDPI(width: 1680, height: 1050, flags: .standard))
+        #expect(try ScaleResolution(parsing: "1680x1050") == .hiDPI(width: 1680, height: 1050, flags: .standard))
+        #expect(try ScaleResolution(parsing: "1680x1050", standard: true) == .standard(width: 1680, height: 1050))
+        #expect(try ScaleResolution(parsing: "1280x720", flags: HiDPIFlags(primary: 1, secondary: 0x20_0000))
+            == .hiDPI(width: 1280, height: 720, flags: HiDPIFlags(primary: 1, secondary: 0x20_0000)))
+    }
+
+    @Test func rejectsWhatAnEntryCannotHold() {
+        #expect(throws: ResoluteError.invalidEntry("Override entries have no refresh rate; remove the @60 Hz part.")) {
+            try ScaleResolution(parsing: "1680x1050@60")
+        }
+        #expect(throws: ResoluteError.invalidEntry("1680x1050@2x asks for HiDPI, but --standard asks for 1×.")) {
+            try ScaleResolution(parsing: "1680x1050@2x", standard: true)
+        }
+        #expect(throws: ResoluteError.invalidEntry("Use @1x or @2x.")) {
+            try ScaleResolution(parsing: "1680x1050@3x")
+        }
+        #expect(throws: ResoluteError.invalidEntry("Flags apply only to HiDPI entries.")) {
+            try ScaleResolution(parsing: "1680x1050@1x", flags: .standard)
+        }
+        #expect(throws: ResoluteError.invalidResolution("big")) {
+            try ScaleResolution(parsing: "big")
+        }
+    }
+}

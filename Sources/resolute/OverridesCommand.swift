@@ -68,18 +68,14 @@ struct OverrideTargetOptions: ParsableArguments {
 
 /// The resolution an `add` or `remove` command names.
 struct EntryOptions: ParsableArguments {
-    @Argument(help: "WIDTHxHEIGHT: points for HiDPI entries, pixels with --standard.")
+    @Argument(help: "WIDTHxHEIGHT: points for a HiDPI entry (or add @2x), pixels for a 1× entry (add @1x or --standard).")
     var resolution: String
 
-    @Flag(help: "A 1× entry instead of a HiDPI one.")
+    @Flag(help: "A 1× entry instead of a HiDPI one (same as @1x).")
     var standard = false
 
-    func entry(flags: HiDPIFlags = .standard) throws -> ScaleResolution {
-        let query = try ModeQuery(resolution: resolution)
-        guard let width = query.width, let height = query.height else {
-            throw ResoluteError.invalidResolution(resolution)
-        }
-        return standard ? .standard(width: width, height: height) : .hiDPI(width: width, height: height, flags: flags)
+    func entry(flags: HiDPIFlags? = nil) throws -> ScaleResolution {
+        try ScaleResolution(parsing: resolution, standard: standard, flags: flags)
     }
 }
 
@@ -150,7 +146,7 @@ struct AddResolution: AsyncParsableCommand {
         let installer = try location.installer()
         let key = try target.key()
         var draft = OverrideDraft(try OverrideStore(locations: location.locations).editableOverride(for: key).override)
-        let newEntry = try entry.entry(flags: try flags.map { try HiDPIFlags(parsing: $0) } ?? .standard)
+        let newEntry = try entry.entry(flags: try flags.map { try HiDPIFlags(parsing: $0) })
         try draft.add(newEntry)
         let url = try await installer.install(draft.working)
         print("Added \(newEntry.summary) to \(url.path(percentEncoded: false))")

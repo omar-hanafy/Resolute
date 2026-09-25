@@ -48,6 +48,38 @@ public enum ScaleResolution: Hashable, Sendable {
     /// An element Resolute does not interpret; written back unchanged.
     case preserved(PreservedEntry)
 
+    /// Reads a command-line entry: "1680x1050" (HiDPI unless `standard`), "1680x1050@2x"
+    /// or "1680x1050@1x". Refresh rates and other scales are rejected.
+    public init(parsing text: String, standard: Bool = false, flags: HiDPIFlags? = nil) throws {
+        let query = try ModeQuery(resolution: text)
+        guard let width = query.width, let height = query.height else {
+            throw ResoluteError.invalidResolution(text)
+        }
+        if let refreshRate = query.refreshRate {
+            throw ResoluteError.invalidEntry(
+                "Override entries have no refresh rate; remove the @\(RefreshRate.format(refreshRate)) part."
+            )
+        }
+        let hiDPI: Bool
+        switch query.scale {
+        case nil: hiDPI = !standard
+        case 1: hiDPI = false
+        case 2:
+            guard !standard else {
+                throw ResoluteError.invalidEntry("\(text) asks for HiDPI, but --standard asks for 1×.")
+            }
+            hiDPI = true
+        default:
+            throw ResoluteError.invalidEntry("Use @1x or @2x.")
+        }
+        if hiDPI {
+            self = .hiDPI(width: width, height: height, flags: flags ?? .standard)
+        } else {
+            guard flags == nil else { throw ResoluteError.invalidEntry("Flags apply only to HiDPI entries.") }
+            self = .standard(width: width, height: height)
+        }
+    }
+
     public var isEditable: Bool {
         if case .preserved = self { return false }
         return true
