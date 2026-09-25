@@ -368,9 +368,12 @@ Commit messages describe the change only (no tool attribution).
   shows when it comes: a display that came back in another mode, or was switched
   elsewhere, is neither saved over nor switched back. The app tries a refused revert again
   every second, since a display that has only just returned may refuse a mode and then
-  change nothing more. Mode choices made while a countdown is up are ignored: the
-  countdown's timer ends the innermost modal alert, so a second alert or countdown would
-  leave the first one on screen without its revert.
+  change nothing more. Mode choices made while a countdown is up are ignored, since a
+  second alert or countdown over it would hold up its revert. `abortModal` ends the
+  innermost modal session, so the countdown's timer ends it only while the countdown's own
+  alert is on top, and otherwise waits for the other alert to close. In the terminal,
+  Ctrl-C answers the prompt with no, and stops a wait for a display with the command that
+  puts the previous mode back.
 - **SkyLight is asked only about online displays.** For an ID it never saw,
   `CGDisplayIsOnline` answers -1 (4294967295 under Rosetta), and for a display that went
   away CoreGraphics keeps a 1×1 placeholder mode. So only an answer that is positive as a

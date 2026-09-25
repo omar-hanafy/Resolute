@@ -6,6 +6,7 @@
 
 - Ctrl-C at `resolute set`'s Keep prompt ended the command and left the hidden mode in place until you logged out, which is worst when the mode shows nothing. Ctrl-C now counts as no and reverts. While `set` waits for a display that went away, Ctrl-C stops the wait after one last try and prints the command that puts the previous mode back.
 - When a hidden mode never showed and its display went away and came back, `resolute set` reported the error before saying how the display came back.
+- An alert opened over the Keep/Revert countdown was closed by the countdown's timer in place of the countdown, which then stayed on screen without reverting. The countdown now waits for that alert to close, then reverts.
 
 ## 0.3.0 — 2026-09-25
 

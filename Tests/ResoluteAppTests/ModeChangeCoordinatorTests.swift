@@ -347,8 +347,8 @@ final class TestClock {
     }
 
     /// A mode chosen while a countdown is up is ignored, with the revert waiting for its
-    /// display: either could open an alert or a second countdown over the first, whose
-    /// timer would then end the wrong one.
+    /// display: either could open an alert or a second countdown over the first, holding
+    /// up its revert until closed.
     @Test func ignoresModesChosenWhileACountdownIsUp() {
         displays.dropMonitor(whenSwitchedTo: 90)
         coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
@@ -366,8 +366,8 @@ final class TestClock {
         #expect(!displays.changes.contains(Change(displayID: 2, modeID: 3, scope: .permanent)))
     }
 
-    /// The countdown's timer ends the innermost modal alert, so no other alert may open
-    /// while it is up: screen changes wait until the switch is over.
+    /// An alert over the countdown would hold up its revert, so none may open while it is
+    /// up: screen changes wait until the switch is over.
     @Test func showsNothingWhileAnotherDisplayIsOnTrial() {
         tryModeThatMakesTheMonitorGoAway()
         displays.refused = [1]

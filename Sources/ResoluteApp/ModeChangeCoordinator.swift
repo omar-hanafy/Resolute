@@ -27,9 +27,9 @@ final class ModeChangeCoordinator {
     private let restoreTimeout: Duration
     private let retryInterval: Duration
     private var waiting: [CGDirectDisplayID: Waiting] = [:]
-    /// Switches under way. During one the Keep/Revert countdown may be up, and its timer
-    /// ends the innermost modal alert, so no other alert may open: screen changes are taken
-    /// up once the switch is over.
+    /// Switches under way. During one the Keep/Revert countdown may be up, and an alert
+    /// over it would hold up its revert until closed, so no other alert may open: screen
+    /// changes are taken up once the switch is over.
     private var switchesUnderWay = 0
     private var hasMissedChanges = false
     /// Displays whose refused revert is due another try.
@@ -63,9 +63,8 @@ final class ModeChangeCoordinator {
     }
 
     func apply(modeID: Int32, to displayID: CGDirectDisplayID, needsConfirmation: Bool) {
-        // The countdown's timer ends the innermost modal alert, so a switch chosen while it
-        // is up, with its own alert or countdown, would leave the first one on screen with
-        // no revert.
+        // A switch chosen while the countdown is up could put its own alert or countdown
+        // over it, holding up the revert until that one is closed.
         guard switchesUnderWay == 0 else {
             ResoluteLog.modes.notice("Ignored mode \(modeID) for display \(displayID), chosen while a countdown was up")
             return
