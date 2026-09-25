@@ -1,0 +1,48 @@
+name: CI
+
+# The repo is private and macOS runner minutes cost 10x; every job is skipped while it
+# stays private, except for a run started by hand.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    if: ${{ !github.event.repository.private || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck
+        run: shellcheck Scripts/*.sh
+      - name: actionlint
+        run: |
+          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+  test:
+    if: ${{ !github.event.repository.private || github.event_name == 'workflow_dispatch' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # The oldest and newest Xcode each runner image offers (swift-tools-version is 6.0,
+      # first supported by Xcode 16.0). Each needs the runner image that ships it.
+      matrix:
+        include:
+          - os: macos-15
+            xcode: "16.0"
+          - os: macos-26
+            xcode: "26.6"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Select Xcode ${{ matrix.xcode }}
+        run: sudo xcode-select -s "/Applications/Xcode_${{ matrix.xcode }}.app"
+      - run: swift --version
+      - run: swift build
+      - run: swift test
+      - run: UNIVERSAL=1 Scripts/build-app.sh
