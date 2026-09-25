@@ -34,6 +34,8 @@ The automated tests can't see the screen, so these checks need a person, and som
 - [ ] Doing nothing, pressing Return or pressing Escape brings the previous mode back. Keep keeps the new mode.
 - [ ] A mode the display can't show comes back by itself when the countdown ends.
 - [ ] `resolute modes --all --raw` lists the hidden modes. `resolute set --mode-id <id> --allow-hidden` asks in the terminal: `y` keeps the mode, anything else or 15 seconds reverts it.
+- [ ] Unplugging the display during the countdown and plugging it back in brings the previous mode back, in the menu and in the terminal.
+- [ ] After Keep, log out and back in. Note whether the hidden mode is still in use: macOS saves modes by size and refresh rate, and may not bring back one it does not list.
 
 ### Custom resolutions (an external display; Apple silicon may ignore scaled ones)
 
@@ -46,6 +48,8 @@ The automated tests can't see the screen, so these checks need a person, and som
 - [ ] A display whose override file can't be read shows why, with Show in Finder, and Remove Override… when it is a file.
 - [ ] Switching displays, or quitting, with unsaved changes asks first.
 - [ ] `sudo resolute overrides add 2560x1080 -d <display>` and `… remove …` behave the same, and `resolute overrides list` shows the result.
+- [ ] `resolute overrides backups -d <display>` lists the backups with local times. `sudo resolute overrides restore 1 -d <display>` puts the newest back, and `sudo resolute overrides prune --keep 1` deletes the others.
+- [ ] Removing a 1× entry that a HiDPI entry renders at (`sudo resolute overrides remove 2560x1440@1x` after adding 1280x720) says so and how to put it back.
 
 ### Install and uninstall
 
@@ -53,4 +57,4 @@ The automated tests can't see the screen, so these checks need a person, and som
 - [ ] If the old app is asking about unsaved custom resolutions, `make install` stops and says so.
 - [ ] `make uninstall` turns off Launch at Login and removes the app and the `resolute` link. Overrides and backups stay.
 
-If something misbehaves, include the output of `resolute displays --json` and `resolute modes --all --raw` when you report it.
+If something misbehaves, include the output of `resolute doctor` (and `resolute modes --all --raw` for mode problems) when you report it.
