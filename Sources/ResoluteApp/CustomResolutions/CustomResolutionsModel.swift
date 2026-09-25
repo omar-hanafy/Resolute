@@ -46,6 +46,8 @@ final class CustomResolutionsModel {
     private(set) var draft: OverrideDraft?
     private(set) var source: OverrideStore.Source = .missing
     private(set) var isWorking = false
+    /// A display someone picked while the current one has unsaved changes.
+    private(set) var pendingSelection: OverrideKey?
     var notice: Notice?
 
     @ObservationIgnored private let service: any DisplayControlling
@@ -78,7 +80,10 @@ final class CustomResolutionsModel {
     /// The name macOS shows for the display; empty keeps the display's own name.
     var productName: String {
         get { draft?.working.productName ?? "" }
-        set { draft?.working.productName = newValue.isEmpty ? nil : newValue }
+        set {
+            guard !isWorking else { return }
+            draft?.working.productName = newValue.isEmpty ? nil : newValue
+        }
     }
 
     var sourceDescription: String {
@@ -109,9 +114,36 @@ final class CustomResolutionsModel {
                 ?? "Display \(String(key.vendorID, radix: 16)):\(String(key.productID, radix: 16))"
             result.append(Target(key: key, name: name, isConnected: false, hasOverride: true))
         }
+        // A display with unsaved changes stays listed after it is unplugged.
+        if let selection, hasChanges, !result.contains(where: { $0.key == selection }),
+           let edited = targets.first(where: { $0.key == selection }) {
+            result.append(Target(key: selection, name: edited.name, isConnected: false, hasOverride: edited.hasOverride))
+        }
         targets = result
         if let selection, result.contains(where: { $0.key == selection }) { return }
         select(result.first?.key)
+    }
+
+    /// Switches to `key`; when that would lose unsaved changes it sets `pendingSelection`
+    /// instead, so the window can ask first.
+    func requestSelection(_ key: OverrideKey?) {
+        guard !isWorking, let key, key != selection else { return }
+        if hasChanges {
+            pendingSelection = key
+        } else {
+            select(key)
+        }
+    }
+
+    func cancelPendingSelection() {
+        pendingSelection = nil
+    }
+
+    func discardChangesAndSelectPending() {
+        guard let key = pendingSelection else { return }
+        pendingSelection = nil
+        draft?.revert()
+        select(key)
     }
 
     func select(_ key: OverrideKey?) {
@@ -123,7 +155,7 @@ final class CustomResolutionsModel {
     func select(displayID: CGDirectDisplayID?) {
         reloadTargets()
         guard let displayID, let display = service.displays().first(where: { $0.id == displayID }) else { return }
-        select(OverrideKey(display: display))
+        requestSelection(OverrideKey(display: display))
     }
 
     private func load() {
@@ -145,6 +177,7 @@ final class CustomResolutionsModel {
 
     /// Adds an entry; returns a message when it is not valid.
     func add(width: Int, height: Int, hiDPI: Bool, flags: HiDPIFlags) -> String? {
+        guard !isWorking else { return "Wait until the save finishes." }
         let entry: ScaleResolution = hiDPI
             ? .hiDPI(width: width, height: height, flags: flags)
             : .standard(width: width, height: height)
@@ -157,21 +190,27 @@ final class CustomResolutionsModel {
     }
 
     func remove(rows ids: Set<Int>) {
+        guard !isWorking else { return }
         draft?.remove(atOffsets: IndexSet(ids))
     }
 
     func revert() {
+        guard !isWorking else { return }
         draft?.revert()
     }
 
     func save() async {
-        guard let draft, canSave else { return }
+        guard let draft, let key = selection, canSave else { return }
+        let written = draft.working
         isWorking = true
         defer { isWorking = false }
         do {
-            try await installer.install(draft.working)
-            self.draft?.markSaved()
-            source = .installed
+            try await installer.install(written)
+            // Editing is locked while saving, so this is the version that was written.
+            if selection == key, self.draft?.working == written {
+                self.draft?.markSaved()
+                source = .installed
+            }
             reloadTargets()
             notice = Notice(
                 title: "Custom resolutions saved",
@@ -185,7 +224,7 @@ final class CustomResolutionsModel {
     }
 
     func removeOverride() async {
-        guard let selection, source == .installed else { return }
+        guard !isWorking, let selection, source == .installed else { return }
         isWorking = true
         defer { isWorking = false }
         do {

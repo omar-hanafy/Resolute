@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var customResolutions: CustomResolutionsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Never shown for an agent app, but it gives text fields and windows their shortcuts.
+        NSApp.mainMenu = MainMenu.make()
         statusMenu = StatusMenuController(
             service: service,
             preferences: preferences,
@@ -25,6 +27,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.customResolutions?.displaysDidChange()
             }
         }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model = customResolutions?.model, model.hasChanges else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Quit without saving your custom resolutions?"
+        alert.informativeText = "Your changes to \(model.selectedTarget?.name ?? "the display") have not been saved."
+        alert.addButton(withTitle: "Keep Editing")
+        alert.addButton(withTitle: "Quit Anyway")
+        NSApp.activate()
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
     }
 
     private func showCustomResolutions(selecting displayID: CGDirectDisplayID?) {

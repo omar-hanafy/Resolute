@@ -27,5 +27,6 @@ let package = Package(
             dependencies: ["ResoluteKit"],
             resources: [.copy("Fixtures")]
         ),
+        .testTarget(name: "ResoluteAppTests", dependencies: ["ResoluteApp", "ResoluteKit"]),
     ]
 )

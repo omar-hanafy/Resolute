@@ -26,6 +26,20 @@ struct CustomResolutionsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 780, minHeight: 500)
+        // Nothing may change while a save waits for the administrator password.
+        .disabled(model.isWorking)
+        .confirmationDialog(
+            "Discard your changes to \(model.selectedTarget?.name ?? "this display")?",
+            isPresented: Binding(
+                get: { model.pendingSelection != nil },
+                set: { if !$0 { model.cancelPendingSelection() } }
+            )
+        ) {
+            Button("Discard Changes", role: .destructive) { model.discardChangesAndSelectPending() }
+            Button("Keep Editing", role: .cancel) { model.cancelPendingSelection() }
+        } message: {
+            Text("Your custom resolutions have not been saved.")
+        }
         .alert(
             model.notice?.title ?? "",
             isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } }),
@@ -44,7 +58,7 @@ private struct TargetList: View {
     var body: some View {
         let connected = model.targets.filter(\.isConnected)
         let others = model.targets.filter { !$0.isConnected }
-        List(selection: Binding(get: { model.selection }, set: { model.select($0) })) {
+        List(selection: Binding(get: { model.selection }, set: { model.requestSelection($0) })) {
             Section("Connected") {
                 ForEach(connected) { target in
                     TargetRow(target: target).tag(target.key)
