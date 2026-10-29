@@ -93,9 +93,12 @@ final class ModeChangeCoordinator {
     /// Switches `displayID` to `modeID`, with a Keep/Revert trial when `needsConfirmation`;
     /// `forSession` switches without one until logout only, as a revert does, so nothing is
     /// saved. Returns how it ended, or nil when it was not tried because a countdown was up.
+    /// A failure is reported unless `reportsFailure` is false, for a caller that says so
+    /// another way, as Shortcuts does.
     @discardableResult
     func apply(
-        modeID: Int32, to displayID: CGDirectDisplayID, needsConfirmation: Bool, forSession: Bool = false
+        modeID: Int32, to displayID: CGDirectDisplayID, needsConfirmation: Bool, forSession: Bool = false,
+        reportsFailure: Bool = true
     ) -> Result<ModeSwitcher.Outcome, any Error>? {
         // A switch chosen while the countdown is up could put its own alert or countdown
         // over it, holding up the revert until that one is closed.
@@ -121,7 +124,7 @@ final class ModeChangeCoordinator {
         case .success(let outcome):
             settle(outcome, of: displayID)
         case .failure(let error):
-            report(error)
+            if reportsFailure { report(error) }
         }
         switchEnded()
         return result

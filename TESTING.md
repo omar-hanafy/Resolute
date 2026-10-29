@@ -66,6 +66,15 @@ The automated tests can't see the screen, so these checks need a person, and som
 - [ ] Presets: New Preset from Current Setup, Apply, Rename…, Delete… and a shortcut that applies the preset from anywhere. `resolute preset list` shows the same presets. After `resolute preset delete <name>`, the deleted preset's shortcut applies nothing and says why.
 - [ ] History lists switches from the panel, the window, the classic menu, the Dock, Terminal and agents, with who asked; Undo puts back what a change replaced; `resolute history` agrees.
 
+### Shortcuts and Spotlight (the app built by `Scripts/build-app.sh`, in /Applications)
+
+- [ ] The Shortcuts app lists Resolute's actions: Apply Preset, Set Resolution, Set Refresh Rate, Mirror Displays, Get Displays and Open Resolute, worded as in Figma (Apply Resolute preset *Coding*, Set resolution of *display* to *size*, …).
+- [ ] Each runs: a preset applies, a size and a rate switch the display named, mirroring turns on and off, Get Displays returns both displays with their modes, Open Resolute opens the window. With Resolute not running, the first action launches it and runs.
+- [ ] Set Resolution offers only the sizes the chosen display lists, never its hidden ones; Set Refresh Rate only the rates at its current size.
+- [ ] History shows each change from Shortcuts with Shortcuts as the source, its Shortcuts filter appears, and Undo puts the change back.
+- [ ] While a hidden mode's Keep/Revert countdown is up, running an action fails with "Resolute is asking whether to keep a display setting…" and changes nothing.
+- [ ] On macOS 26 or later, Spotlight shows Resolute's actions; typing a size (such as 1496) offers "Set 1496 × 967", which switches the display that has it. Siri runs "Apply Coding with Resolute".
+
 ### Sharp Scaling (a standard 1080p or 1440p monitor)
 
 - [ ] The monitor's panel card offers Set Up Sharp Scaling…; its × hides the offer for that monitor only.

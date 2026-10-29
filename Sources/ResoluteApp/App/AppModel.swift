@@ -319,14 +319,49 @@ final class AppModel {
         refresh()
     }
 
+    /// Switches `displayID` to the listed mode `modeID`, asked for from `source`, and throws
+    /// a `ChangeFailure` rather than showing an alert when that fails: for Shortcuts, where
+    /// nobody may be watching, so a hidden mode is refused rather than tried. History records
+    /// how the switch ended. Returns how it ended, or nil when it was not tried because a
+    /// countdown was up.
+    func applyListedMode(
+        _ modeID: Int32, to displayID: CGDirectDisplayID, from source: HistoryEntry.Source
+    ) throws -> ModeSwitcher.Outcome? {
+        let title = "The display mode could not be changed"
+        // As it is now, before the switch, which is how History records a change.
+        guard let before = service.displays().first(where: { $0.id == displayID }) else {
+            refresh()
+            throw ChangeFailure(title: title, reason: ResoluteError.displayNotFound("id:\(displayID)"))
+        }
+        guard let mode = before.modes.first(where: { $0.modeID == modeID }), mode.origin != .hidden else {
+            throw ChangeFailure(title: title, reason: ResoluteError.modeNotFound("mode \(modeID)", suggestions: []))
+        }
+        guard let result = switchMode(of: before, to: mode, needsConfirmation: false, reportsFailure: false) else {
+            return nil
+        }
+        record(result, switching: before, to: mode, from: source)
+        refresh()
+        switch result {
+        case .success(let outcome):
+            return outcome
+        case .failure(let error):
+            throw ChangeFailure(title: title, reason: error)
+        }
+    }
+
     /// Switches through the coordinator, naming the display and mode for the trial's
     /// question first, and says on the display how a trial ended. Returns how the switch
-    /// ended, or nil when it was not tried because a countdown was up.
-    func switchMode(of display: Display, to mode: DisplayMode, needsConfirmation: Bool) -> Result<ModeSwitcher.Outcome, any Error>? {
+    /// ended, or nil when it was not tried because a countdown was up. A failure shows an
+    /// alert unless `reportsFailure` is false.
+    func switchMode(
+        of display: Display, to mode: DisplayMode, needsConfirmation: Bool, reportsFailure: Bool = true
+    ) -> Result<ModeSwitcher.Outcome, any Error>? {
         guard !isTrialHeldByAgentRequest(needsConfirmation) else { return nil }
         trial.subject = TrialPrompt.Subject(display: display, mode: mode)
         defer { trial.subject = nil }
-        let result = modeChanges.apply(modeID: mode.modeID, to: display.id, needsConfirmation: needsConfirmation)
+        let result = modeChanges.apply(
+            modeID: mode.modeID, to: display.id, needsConfirmation: needsConfirmation, reportsFailure: reportsFailure
+        )
         if needsConfirmation, case .success(let outcome)? = result, let question = trial.lastQuestion, question.displayID == display.id {
             switch outcome {
             case .reverted: showTrialOutcome(.switchedBack, question)
@@ -345,11 +380,18 @@ final class AppModel {
         _ rate: Double, on displayID: CGDirectDisplayID, from source: HistoryEntry.Source = .panel, includeHidden: Bool = true
     ) {
         guard let display = displays.first(where: { $0.id == displayID }),
-              let option = ModeCatalog.refreshOptions(for: display, includeHidden: includeHidden)
-                .first(where: { RefreshRate.key($0.refreshRate) == RefreshRate.key(rate) }),
+              let option = Self.refreshOption(rate, of: display, includeHidden: includeHidden),
               !option.isCurrent
         else { return }
         apply(option.mode, to: display, from: source)
+    }
+
+    /// The mode `ModeCatalog.refreshOptions` picks for `rate` at `display`'s current
+    /// resolution, among listed modes only unless `includeHidden`; nil when the display
+    /// offers no such rate there.
+    static func refreshOption(_ rate: Double, of display: Display, includeHidden: Bool) -> RefreshOption? {
+        ModeCatalog.refreshOptions(for: display, includeHidden: includeHidden)
+            .first { RefreshRate.key($0.refreshRate) == RefreshRate.key(rate) }
     }
 
     /// Whether a trial must wait because `resolute` is asking the person about one already.
@@ -366,9 +408,24 @@ final class AppModel {
 
     /// Mirrors every display to the main one, or stops mirroring.
     func setMirroring(_ enabled: Bool, from source: HistoryEntry.Source = .panel) {
+        do {
+            try changeMirroring(enabled, from: source)
+        } catch let failure as ChangeFailure {
+            showError(failure.reason, failure.title)
+        } catch {
+            showError(error, "Mirroring could not be changed")
+        }
+    }
+
+    /// Mirrors every display to the main one, or stops mirroring, and throws a
+    /// `ChangeFailure` rather than showing an alert when that fails. Returns false when it
+    /// was not tried because a countdown was up.
+    @discardableResult
+    func changeMirroring(_ enabled: Bool, from source: HistoryEntry.Source) throws -> Bool {
         // Mirroring changes the displays a trial must put back.
-        guard !modeChanges.isChangingMode else { return }
+        guard !modeChanges.isChangingMode else { return false }
         let before = displays
+        defer { refresh() }
         do {
             try service.setMirroring(enabled)
             if enabled != before.contains(where: \.isInMirrorSet) {
@@ -376,9 +433,9 @@ final class AppModel {
             }
         } catch {
             history(from: source).recordMirroring(enabled, displays: before, failedWith: error)
-            showError(error, "Mirroring could not be changed")
+            throw ChangeFailure(title: "Mirroring could not be changed", reason: error)
         }
-        refresh()
+        return true
     }
 
     func toggleMirroring(from source: HistoryEntry.Source = .panel) {
@@ -484,5 +541,18 @@ final class AppModel {
     /// "Display 10ac:a0c4": a display that is not connected and whose override has no name.
     static func fallbackName(for key: OverrideKey) -> String {
         "Display \(String(key.vendorID, radix: 16)):\(String(key.productID, radix: 16))"
+    }
+}
+
+/// A change that failed, as its alert would say it: `title` over `reason`. The model's
+/// actions throw it to callers that show no alert, such as Shortcuts.
+struct ChangeFailure: LocalizedError {
+    var title: String
+    var reason: any Error
+
+    /// "“Coding” could not be applied. It was deleted outside Resolute, …"
+    var errorDescription: String? {
+        let reason = reason.localizedDescription
+        return reason.isEmpty ? "\(title)." : "\(title). \(reason)"
     }
 }

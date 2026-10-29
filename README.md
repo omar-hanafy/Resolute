@@ -10,7 +10,8 @@ Resolute is a Swift menu-bar app and command-line tool inspired by [RDM](https:/
 
 - **A menu bar panel.** One card per display with its picture, five sizes from Larger Text to More Space that switch in one click, and its refresh rates; All Resolutions lists every mode, with HiDPI and 1× tabs and, on request, modes macOS hides.
 - **Recoverable hidden-mode trials.** A hidden mode is tried for the session on its own display, with Keep and Revert and a countdown (15 seconds by default); Revert is the default and doing nothing reverts. A kept hidden mode lasts until you log out. If the display goes dark, Resolute waits for it and puts the previous mode back.
-- **Presets** for every display and mirroring, from the panel, a keyboard shortcut, the Dock or `resolute preset`.
+- **Presets** for every display and mirroring, from the panel, a keyboard shortcut, the Dock, Shortcuts or `resolute preset`.
+- **Shortcuts, Siri and Spotlight actions:** Apply Preset, Set Resolution, Set Refresh Rate, Mirror Displays, Get Displays and Open Resolute. They switch to listed modes only, since nobody may be watching the display.
 - **History with Undo.** Every switch from the app and the command line, kept for 7 days with who asked for it.
 - **Agents can ask, people keep.** `resolute set --allow-hidden` from an agent shows the Keep/Revert dialog on the display, naming the agent; only a person can keep the mode.
 - **The window:** a page per display (Resolution, Custom Resolutions, Picture & Name), displays that are not connected, Presets, History and Settings.

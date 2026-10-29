@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var agentRequests: AgentRequests?
     /// Notifies of an agent's display changes, with Undo, while Settings says to.
     private var agentChanges: AgentChangeNotifier?
+    /// Keeps the App Shortcuts that name a preset or a resolution current.
+    private var shortcutParameters: ShortcutParameterUpdates?
     /// Welcome, while it is open.
     private var welcome: WelcomeWindowController?
 
@@ -25,6 +27,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let launchKind = LaunchKind(appleEvent: NSAppleEventManager.shared().currentAppleEvent)
         let model = AppModel(environment: .live(launchKind: launchKind))
         self.model = model
+        // Shortcuts and Spotlight actions run through this model from now on. App Shortcuts
+        // belong to the app bundle, which the debug binary lacks.
+        IntentHost.appModel = model
+        if Bundle.main.bundleIdentifier != nil {
+            let shortcutParameters = ShortcutParameterUpdates()
+            shortcutParameters.start(model: model)
+            self.shortcutParameters = shortcutParameters
+        }
         let agentRequests = AgentRequests(model: model)
         model.agentRequests = agentRequests
         agentRequests.start()

@@ -6,64 +6,42 @@ Figma: System integrations, page 8:10. Dock menu 44:76, Control Center 44:755, S
 
 - **Dock menu** (`DockMenu.swift`). `DockMenu.make(model:)` returns the menu for `applicationDockMenu(_:)`. It lists each display's sizes at hand (the one in use, the default, and the sizes the presets give that display), then its refresh rates, then Presets and Mirror Displays. That reproduces Figma's two displays exactly with Figma's three presets. Every item calls the app model with `from: .dock`, so History records the Dock. Hidden modes are left out: nobody may be watching the display that a Dock menu switches. A hidden mode that is already in use is still listed, checked, so the menu always shows the display's current state. macOS adds Options, Show All Windows, Hide and Quit itself.
 
-## Investigated, not built
+- **Shortcuts and Siri** (`AppIntents/`). Figma's six actions, as App Intents in the app:
 
-The probe in this investigation was a scratch SwiftPM package. It was built on Xcode 27.1 (27A9275, Swift 6.4, macOS 27 SDK) on 29 October 2026, and nothing was installed, registered or run. `Scripts/build-app.sh` was left unchanged, as the task required. None of the three integrations below can work without changing that script, so this branch contains no code for them. App Intents types without their metadata would compile, but macOS would never find them.
+  | Action | Shortcuts says | Returns |
+  | --- | --- | --- |
+  | Apply Preset | Apply Resolute preset *Coding* | a dialog |
+  | Set Resolution | Set resolution of *DELL U2723QE* to *2560 × 1440* | the display |
+  | Set Refresh Rate | Set refresh rate of *Built-in Retina Display* to *120 Hz* | the display |
+  | Mirror Displays | *Turn on* display mirroring (or Turn off, Toggle) | whether it is on |
+  | Get Displays | Get *all displays* from Resolute (or the main display) | displays |
+  | Open Resolute | Open Resolute | |
 
-### Shortcuts and Siri (App Intents, 45:262)
+  - **How they reach the app.** Intents run in Resolute's own process. The app delegate sets `IntentHost.appModel` as soon as it has made the model, and every intent and query waits for it (`IntentHost.readyModel()`, up to 10 seconds, for when macOS launches Resolute to run one). `AppDependencyManager` would work too, but its dependency has to be registered before an intent arrives, which is the same wait; a main-actor reference keeps it plain and lets the tests use their own model.
+  - **What they do.** `ShortcutActions` does the work, through the app model, so everything the panel's actions are guarded by applies. Presets go through `runPreset(_:from:)`, mirroring through `changeMirroring(_:from:)`, sizes and rates through `applyListedMode(_:to:from:)` (refresh rates pick their mode with `AppModel.refreshOption`, as `setRefreshRate` does). Each passes `from: .shortcuts`, so History records Shortcuts, and History's Shortcuts filter appears once it has such a change. These are the throwing forms of `applyPreset`, `setMirroring` and `apply`: they throw a `ChangeFailure` (the alert's title and message), and the coordinator is told not to show its own alert, so Shortcuts shows the message instead.
+  - **Listed modes only.** The resolutions and rates on offer, and the modes switched to, are a display's system modes. Nobody may be watching the display, so nothing that would need Keep or Revert is ever tried, as with the Dock menu. A resolution picked for one display and used with another switches the other to the same size when it lists it.
+  - **While a question is up.** While the app's Keep/Revert countdown is up (`modeChanges.isChangingMode`) or an agent's question is (`agentRequests.isAsking`), every action that changes something fails with "Resolute is asking whether to keep a display setting. Answer that first, then try again." The coordinator would turn the switch away anyway; failing says so instead of doing nothing.
+  - **Entities.** A display is named by `ShortcutCatalog.identifier(of:among:)`: "builtin", else vendor, product and serial number, which last across restarts. Identical monitors with no serial number add their display ID, which lasts while they stay connected. A resolution's ID names its display and its size in points and pixels; a rate's is its hundredths of a hertz. Presets are found by ID, and by name for Siri.
+  - **App Shortcuts** (`ResoluteShortcuts`). One per action, with Figma's symbols. Apply Preset and Set Resolution have a phrase that names their value, so Siri and Spotlight offer one per preset and per resolution. `ShortcutParameterUpdates` asks App Shortcuts to read the presets and resolutions again whenever they change.
 
-**Verdict: feasible in a pure SwiftPM build, but only with build-script changes. No Xcode project is needed.**
+- **Spotlight** (macOS 26 shows app actions). The same metadata makes every action discoverable (`isDiscoverable` is true by default from macOS 14), and Spotlight lists the App Shortcuts. Typing a size finds "Set 1496 × 967", the Set Resolution shortcut for that resolution, which switches the display the resolution belongs to without asking which. Left out: indexing each size as a Spotlight item (`IndexedEntity` and `CSSearchableIndex.indexAppEntities`, macOS 15). An indexed item opens the app when chosen rather than switching, it needs the index kept in step with the displays, and the App Shortcut already finds the size. Figma's row says "Set Built-in Retina Display to 1496 × 967"; what Spotlight shows for the shortcut is up to macOS and hasn't been seen.
 
-macOS discovers intents only through `Resolute.app/Contents/Resources/Metadata.appintents`. Xcode writes that folder with `appintentsmetadataprocessor`, which is in the toolchain:
+### How the metadata is built
 
-```
-$ xcrun --find appintentsmetadataprocessor
-/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor
-```
+macOS finds App Intents only through `Resolute.app/Contents/Resources/Metadata.appintents`. Xcode writes it with `appintentsmetadataprocessor` from the `.swiftconstvalues` the compiler emits; SwiftPM asks for neither, so `Scripts/build-app.sh` does both after `swift build`, before signing:
 
-The processor reads the `.swiftconstvalues` the compiler emits for the module. Without them it prints `No swiftconstvalues found ... Extracted no relevant App Intents symbols, skipping writing output` and writes nothing. The compiler emits them only when told to. The flags are those Xcode's own build rule passes:
+1. **Constant values, for ResoluteApp only.** A second `swiftc -wmo -c` of `Sources/ResoluteApp` against the modules `swift build` just made, with `-emit-const-values-path` and `-Xfrontend -const-gather-protocols-file`. `-Xswiftc` on `swift build` would reach every module, and each would overwrite the same file (an earlier probe's first pitfall). Xcode 16.0, the oldest CI toolchain, may want `-Xfrontend -const-gather-protocols-file` spelled this way (the third pitfall), so it is.
+2. **Never stale.** It writes into a folder `mktemp -d` makes on every run and removes on exit, and the app bundle is made new on every run too, so an incremental build can't leave an older file behind (the second pitfall). Checked by renaming an intent, running the script, and renaming it back: each run's metadata had the name of that moment.
+3. **The processor's options.** The options Xcode 27.1's processor requires are always passed (`--output`, `--toolchain-dir`, `--module-name`, `--sdk-root`, `--xcode-version`, `--platform-family`, `--deployment-target`, `--target-triple`, `--source-file-list`, `--swift-const-vals-list`). `--compile-time-extraction`, `--deployment-aware-processing`, `--no-app-shortcuts-localization`, `--force` and `--bundle-identifier` are passed only when the processor's `--help` lists them; 27.1's lists `--deployment-aware-processing`, `--no-app-shortcuts-localization` and `--force`. If that writes nothing, the script runs it again with the options Xcode itself passes but newer processors hide, `--compile-time-extraction` and `--binary-file`. 27.1's output was the same either way, and it ignored an option it didn't know.
+4. **The check.** The processor's exit status says little (the fourth pitfall): with no constant values it prints "Extracted no relevant App Intents symbols, skipping writing output" and exits 0. So the build fails unless `Metadata.appintents/extract.actionsdata` exists and isn't empty.
 
-```
-$ swift build --jobs 4 -c release --arch arm64 \
-    -Xswiftc -emit-const-values-path -Xswiftc $P/out/Probe.swiftconstvalues \
-    -Xswiftc -const-gather-protocols-list -Xswiftc $P/protocols.json
-Build complete!            # Probe.swiftconstvalues lists Probe.OpenProbeIntent, Probe.ProbeShortcuts
+The signature covers `Resources`, so signing is unchanged. The protocol list holds every name a supported Xcode extracts by; names a compiler doesn't know match nothing.
 
-$ xcrun appintentsmetadataprocessor --output meta/Resources --toolchain-dir $TC --module-name Probe \
-    --sdk-root $SDK --xcode-version 27A9275 --platform-family macOS --deployment-target 14.0 \
-    --target-triple arm64-apple-macos14.0 --bundle-identifier com.example.probe \
-    --source-file-list meta/sources.txt --swift-const-vals-list meta/constvals.txt \
-    --compile-time-extraction --deployment-aware-processing --no-app-shortcuts-localization --force
-Writing Metadata.appintents
-# Metadata.appintents/extract.actionsdata (1553 B): OpenProbeIntent, isDiscoverable true, autoShortcuts
-# Metadata.appintents/version.json: {"toolsVersion":"27A9275","version":"3.0"}
-```
+Verified on Xcode 27.1 (27A9275, Swift 6.4): `extract.actionsdata` names the six intents, the four entities and their queries, both enums and the six App Shortcuts, and `codesign --verify --strict --deep` passes. The metadata didn't change when the intents' static properties went from stored to computed (stored ones of AppIntents types need a macOS 15 `Sendable` conformance). Not verified here: the processors in Xcode 16.0 and 26.6, which CI runs; that Shortcuts and Spotlight list the actions of an ad hoc signed build; and the actions run on a real display. `TESTING.md` lists the hand checks.
 
-The probe found four pitfalls:
+## Not built
 
-- `-Xswiftc` on the command line applies to every module. Each module overwrites the same const-values file, and a module without intents writes `[]`. Resolute builds the CLI and ArgumentParser alongside the app, so the flag must apply to the ResoluteApp target alone. Two ways to do that:
-  - A per-target `.unsafeFlags` in `Package.swift`, with absolute paths from `Context.packageDirectory`. Swift Build runs `swiftc` from the package's parent folder, so a relative path lands outside the package.
-  - A second `swiftc -wmo -emit-module` pass over `Sources/ResoluteApp` after `swift build`.
-- SwiftPM doesn't track the file as a build output, so an incremental build may not rewrite it.
-- With Xcode 16.0 (Swift 6.0, which CI still uses), the frontend form `-Xfrontend -const-gather-protocols-file` is the safe spelling. This was inferred and not run.
-- The processor's exit status wasn't captured. The script should check that `extract.actionsdata` exists rather than trust the exit status.
-
-The script would need these steps, after `swift build` and before both `codesign` calls:
-
-1. Produce `ResoluteApp.swiftconstvalues`, using one of the two ways above.
-2. Write the list of `Sources/ResoluteApp` files and the const-values path to two list files.
-3. Run the processor into `$APP/Contents/Resources`, with the flags shown above and the app's bundle identifier.
-4. Fail if `Metadata.appintents/extract.actionsdata` is missing.
-
-The existing signature covers `Resources`, so signing stays as it is.
-
-Two things remain unverified: that Shortcuts lists the actions of an ad hoc signed app assembled this way, and Figma's actions (Apply Preset, Set Resolution, Set Refresh Rate, Mirror Displays, Get Displays, Open Resolute). Both need a run on a test Mac.
-
-### Spotlight actions (45:442, macOS 26+)
-
-**Verdict: feasible in a pure SwiftPM build, with the same build-script changes as Shortcuts, and no extension.**
-
-Spotlight's actions come from the same `Metadata.appintents`. `AppIntent.isDiscoverable` is available from macOS 14, defaults to true, and the probe's metadata already carries `"isDiscoverable": true`. Figma's "type a size" search would also need `IndexedEntity` entities (macOS 15) indexed with `CSSearchableIndex.indexAppEntities(_:)`. `IndexedEntityQuery` is macOS 27 only.
+The earlier probe was a scratch SwiftPM package, built on Xcode 27.1 (27A9275, Swift 6.4, macOS 27 SDK) on 29 October 2026; nothing was installed, registered or run.
 
 ### Control Center and menu bar controls (44:755, macOS 26+)
 

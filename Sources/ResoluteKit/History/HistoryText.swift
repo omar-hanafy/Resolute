@@ -36,9 +36,8 @@ public enum HistoryFilter: String, CaseIterable, Hashable, Sendable {
         }
     }
 
-    /// The filters the History page offers for `entries`. Shortcuts actions are not built
-    /// yet, so its filter shows only once History has a change from one, as a later
-    /// Resolute may write.
+    /// The filters the History page offers for `entries`. Shortcuts shows only once History
+    /// has a change from a Shortcuts action, since most people never run one.
     public static func offered(for entries: [HistoryEntry]) -> [HistoryFilter] {
         let hasShortcuts = entries.contains { $0.source.category == .shortcuts }
         return allCases.filter { $0 != .shortcuts || hasShortcuts }

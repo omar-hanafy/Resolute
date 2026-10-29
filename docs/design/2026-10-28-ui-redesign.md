@@ -184,8 +184,15 @@ their Figma nodes. Compare each with its Figma frame in both appearances.
 - **Orange text.** Text in the warning color (Unsaved, Failed, Hidden) uses
   `Palette.warningText`, darker than Figma's orange in Light so it reads at 4.5:1 or more;
   symbols keep the system orange.
-- **System integrations.** Shortcuts and Spotlight (App Intents) need metadata a pure SwiftPM
-  build doesn't produce yet, and Control Center needs a sandboxed widget extension SwiftPM can't
-  package; the findings and the build changes they would need are in
-  `Sources/ResoluteApp/Integrations/README.md`. Until then no copy offers them, and
-  History's Shortcuts filter shows only once History has a change from Shortcuts.
+- **System integrations.** Shortcuts, Siri and Spotlight get Figma's six actions as App
+  Intents in the app: Apply Preset, Set Resolution, Set Refresh Rate, Mirror Displays, Get
+  Displays and Open Resolute. They go through the app model with Shortcuts as History's
+  source, use listed modes only (nobody may be watching the display, as with the Dock menu),
+  and fail with a message, never an alert, while a Keep/Revert question is up.
+  `Scripts/build-app.sh` writes the `Metadata.appintents` macOS finds them by, since SwiftPM
+  doesn't. Spotlight finds "Set 1496 × 967" through the App Shortcut whose phrase names a
+  resolution; indexing sizes as Spotlight items (`IndexedEntity`, macOS 15) is left out.
+  Control Center needs a sandboxed widget extension and an app group, which needs a paid
+  Team ID, so it isn't built. The details are in `Sources/ResoluteApp/Integrations/README.md`.
+  No other copy mentions Shortcuts, and History's Shortcuts filter shows only once History has
+  a change from Shortcuts.

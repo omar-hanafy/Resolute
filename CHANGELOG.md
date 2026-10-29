@@ -9,6 +9,7 @@
 - Sharp Scaling: Retina-style sizes for standard 1080p and 1440p monitors, written to the display's override file with a backup; `resolute scaling plan`, `on`, `off` and `status`.
 - `resolute set --allow-hidden` asks the running app to show its Keep/Revert dialog on the display being tried, naming the agent or terminal that asked. `set --json` reports how a trial ended.
 - Display pictures and names: the override file can carry the picture System Settings shows for a display.
+- Shortcuts, Siri and Spotlight actions: Apply Preset, Set Resolution, Set Refresh Rate, Mirror Displays, Get Displays and Open Resolute. They use listed modes only, History records them as Shortcuts, and while a Keep/Revert question is up they fail and say why. `Scripts/build-app.sh` writes the App Intents metadata macOS finds them by, and fails the build without it.
 
 ### Changed
 

@@ -42,6 +42,67 @@ for binary in "$APP/Contents/MacOS/Resolute" "$APP/Contents/Helpers/resolute"; d
   mv "$binary.stamped" "$binary"
 done
 
+# App Intents (Shortcuts, Siri, Spotlight): macOS finds them only through
+# Contents/Resources/Metadata.appintents, which Xcode writes with appintentsmetadataprocessor
+# from the constant values the compiler extracts. SwiftPM doesn't ask for those, and an
+# -Xswiftc flag would reach every module, so a second compile of the ResoluteApp module alone
+# extracts them, into a folder made new on every run so nothing stale is read.
+META="$(mktemp -d "${TMPDIR:-/tmp}/resolute-appintents.XXXXXX")"
+trap 'rm -rf "$META"' EXIT
+MODULES="$(find "$BIN" -maxdepth 2 -name ResoluteKit.swiftmodule -print -quit)"
+if [[ -z "$MODULES" ]]; then
+  echo "ResoluteKit.swiftmodule is not under $BIN, so App Intents can't be extracted." >&2
+  exit 1
+fi
+MODULES="$(dirname "$MODULES")"
+SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
+DEPLOYMENT_TARGET="$(vtool -show-build "$APP/Contents/MacOS/Resolute" | awk '/minos/ { print $2; exit }')"
+TRIPLE="arm64-apple-macos$DEPLOYMENT_TARGET"
+find "$PWD/Sources/ResoluteApp" -name '*.swift' | sort > "$META/sources.txt"
+# Every protocol any supported Xcode extracts App Intents types by; a name a compiler doesn't
+# know matches nothing.
+cat > "$META/protocols.json" <<'JSON'
+["AnyResolverProviding","AppEntity","AppEnum","AppIntent","AppIntentsPackage","AppShortcutProviding","AppShortcutsProvider","DynamicOptionsProvider","EntityQuery","IntentValueQuery","TransientEntity","_IntentValueRepresentable"]
+JSON
+xcrun swiftc -wmo -c -o "$META/ResoluteApp.o" -module-name ResoluteApp -swift-version 6 \
+  -target "$TRIPLE" -sdk "$SDK_PATH" -I "$MODULES" \
+  -emit-const-values-path "$META/ResoluteApp.swiftconstvalues" \
+  -Xfrontend -const-gather-protocols-file -Xfrontend "$META/protocols.json" \
+  "@$META/sources.txt"
+echo "$META/ResoluteApp.swiftconstvalues" > "$META/constvals.txt"
+
+# Older processors lack some options, so only those this one lists in --help are passed.
+PROCESSOR_HELP="$(xcrun appintentsmetadataprocessor --help 2>&1 || true)"
+supports() { grep -qE -e "(^|[[:space:],])$1([[:space:],]|$)" <<<"$PROCESSOR_HELP"; }
+PROCESSOR_FLAGS=()
+for option in --compile-time-extraction --deployment-aware-processing --no-app-shortcuts-localization --force; do
+  if supports "$option"; then PROCESSOR_FLAGS+=("$option"); fi
+done
+if supports --bundle-identifier; then
+  PROCESSOR_FLAGS+=(--bundle-identifier "$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")")
+fi
+TOOLCHAIN_DIR="$(cd "$(dirname "$(xcrun --find swiftc)")/../.." && pwd)"
+XCODE_BUILD="$(xcodebuild -version | awk '/Build version/ { print $3 }')"
+ACTIONS_DATA="$APP/Contents/Resources/Metadata.appintents/extract.actionsdata"
+process_app_intents() {
+  # Its exit status says little, so what counts is the file macOS reads.
+  xcrun appintentsmetadataprocessor --output "$APP/Contents/Resources" --toolchain-dir "$TOOLCHAIN_DIR" \
+    --module-name ResoluteApp --sdk-root "$SDK_PATH" --xcode-version "$XCODE_BUILD" --platform-family macOS \
+    --deployment-target "$DEPLOYMENT_TARGET" --target-triple "$TRIPLE" --source-file-list "$META/sources.txt" \
+    --swift-const-vals-list "$META/constvals.txt" "$@" || true
+}
+process_app_intents ${PROCESSOR_FLAGS[@]+"${PROCESSOR_FLAGS[@]}"}
+if [[ ! -s "$ACTIONS_DATA" ]]; then
+  # A processor that hides the options Xcode passes may still need them.
+  echo "No App Intents metadata yet; trying again with the options Xcode passes." >&2
+  process_app_intents ${PROCESSOR_FLAGS[@]+"${PROCESSOR_FLAGS[@]}"} --compile-time-extraction \
+    --binary-file "$APP/Contents/MacOS/Resolute"
+fi
+if [[ ! -s "$ACTIONS_DATA" ]]; then
+  echo "appintentsmetadataprocessor wrote no $ACTIONS_DATA, so Shortcuts would find no actions." >&2
+  exit 1
+fi
+
 # Ad hoc signing (the default) never leaves this Mac, so it gets neither the hardened
 # runtime nor a timestamp. Neither binary needs entitlements: the app calls SkyLight via
 # dlsym on system frameworks and runs /usr/bin/osascript as a subprocess.

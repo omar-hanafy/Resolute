@@ -2,8 +2,8 @@ import CoreGraphics
 import ResoluteKit
 
 /// A page of the Resolute window. Everything that opens the window names one: the panel,
-/// the classic menu, the main menu's Go menu, Settings… (⌘,) and, later, Shortcuts and
-/// the Dock menu.
+/// the classic menu, the main menu's Go menu, Settings… (⌘,) and Open Resolute in
+/// Shortcuts.
 enum AppRoute: Hashable, Sendable {
     /// One display's page, on one of its tabs.
     case display(DisplayTarget, tab: DisplayTab = .resolution)

@@ -39,20 +39,32 @@ extension AppModel {
     /// applies nothing, as `resolute preset apply` does.
     func applyPreset(_ chosen: Preset, from source: HistoryEntry.Source = .panel) {
         do {
-            try loadPresets()
+            try runPreset(chosen, from: source)
+        } catch let failure as ChangeFailure {
+            showError(failure.reason, failure.title)
         } catch {
             showError(error, "“\(chosen.name)” could not be applied")
-            return
+        }
+    }
+
+    /// Applies `chosen` as `applyPreset(_:from:)` does, and throws a `ChangeFailure` rather
+    /// than showing an alert when any of it fails, for Shortcuts. Returns the preset as it
+    /// was applied, or nil when it was not tried because a countdown was up.
+    @discardableResult
+    func runPreset(_ chosen: Preset, from source: HistoryEntry.Source) throws -> Preset? {
+        do {
+            try loadPresets()
+        } catch {
+            throw ChangeFailure(title: "“\(chosen.name)” could not be applied", reason: error)
         }
         guard let preset = presets.first(where: { $0.id == chosen.id }) else {
-            showError(
-                PresetNotApplied(details: ["It was deleted outside Resolute, such as with resolute preset delete."]),
-                "“\(chosen.name)” could not be applied"
+            throw ChangeFailure(
+                title: "“\(chosen.name)” could not be applied",
+                reason: PresetNotApplied(details: ["It was deleted outside Resolute, such as with resolute preset delete."])
             )
-            return
         }
         let before = displays
-        guard let result = modeChanges.applyPreset(preset) else { return }
+        guard let result = modeChanges.applyPreset(preset) else { return nil }
         history(from: source).record(result, applying: preset, displays: before)
         refresh()
         if result.hasFailures {
@@ -60,16 +72,17 @@ extension AppModel {
                 if case .failed(let message) = change.outcome { return "\(change.displayName): \(message)" }
                 return nil
             }
-            showError(
-                PresetNotApplied(details: failures),
-                result.changedAnything ? "“\(preset.name)” was applied only in part" : "“\(preset.name)” could not be applied"
+            throw ChangeFailure(
+                title: result.changedAnything ? "“\(preset.name)” was applied only in part" : "“\(preset.name)” could not be applied",
+                reason: PresetNotApplied(details: failures)
             )
         } else if result.appliedNothing {
-            showError(
-                PresetNotApplied(details: ["Nothing in it applies to the displays connected now."]),
-                "“\(preset.name)” could not be applied"
+            throw ChangeFailure(
+                title: "“\(preset.name)” could not be applied",
+                reason: PresetNotApplied(details: ["Nothing in it applies to the displays connected now."])
             )
         }
+        return preset
     }
 }
 
