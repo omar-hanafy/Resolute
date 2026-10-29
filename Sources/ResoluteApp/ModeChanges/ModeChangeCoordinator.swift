@@ -163,10 +163,17 @@ final class ModeChangeCoordinator {
     /// Puts back what `restore` names, for a trial no switch of the app's will finish (a
     /// killed command's): now when its display is here and takes it, else once it is back,
     /// waiting as a trial's revert does. Returns how it went now, `.waiting` while it waits,
-    /// or nil when it was not tried because a countdown was up.
+    /// or nil when it was not tried because a countdown was up. Throws when it can't wait:
+    /// another display has its display ID now, with a revert of its own waiting, and an ID
+    /// holds one revert, which the display that is here keeps.
     @discardableResult
-    func putBack(_ restore: ModeSwitcher.PendingRestore) -> ModeSwitcher.RestoreProgress? {
+    func putBack(_ restore: ModeSwitcher.PendingRestore) throws -> ModeSwitcher.RestoreProgress? {
         guard switchesUnderWay == 0 else { return nil }
+        // The revert of another display that has this ID now goes first, as before a switch:
+        // finished, it leaves the ID to this one.
+        if let other = waiting[restore.displayID], other.restore.displayIdentity != restore.displayIdentity {
+            attempt(restore.displayID)
+        }
         let progress: ModeSwitcher.RestoreProgress
         do {
             progress = try ModeSwitcher(service: service).finish(restore)
@@ -175,6 +182,14 @@ final class ModeChangeCoordinator {
             progress = .waiting
         }
         if progress == .waiting {
+            if let other = waiting[restore.displayID], other.restore.displayIdentity != restore.displayIdentity {
+                ResoluteLog.modes.error("""
+                    \(other.restore.displayName, privacy: .public) has the display ID of \
+                    \(restore.displayName, privacy: .public) and a revert waiting, so mode \(restore.modeID) \
+                    can't be put back on it
+                    """)
+                throw DisplayIDTaken(display: restore.displayName)
+            }
             // Joined with a revert still waiting for the display, as a new trial's is.
             settle(.restorePending(restore), of: restore.displayID)
         } else if waiting[restore.displayID] != nil {
@@ -370,5 +385,15 @@ final class ModeChangeCoordinator {
             try? await Task.sleep(until: deadline, clock: .continuous)
             self?.expireRestores()
         }
+    }
+}
+
+/// Why a revert for a display that is away could not wait: another display has its ID now,
+/// with a revert of its own waiting.
+struct DisplayIDTaken: LocalizedError {
+    var display: String
+
+    var errorDescription: String? {
+        "Another display took the place of \(display) while it was away, so its previous mode was not put back."
     }
 }

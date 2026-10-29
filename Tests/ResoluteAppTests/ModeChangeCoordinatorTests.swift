@@ -398,11 +398,53 @@ final class CoordinatorLog {
         displays.refused = []
         let restore = try #require(ModeSwitcher.restore(undoing: 3, on: before, backTo: 90))
 
-        #expect(coordinator.putBack(restore) == .restored(to: 90))
+        #expect(try coordinator.putBack(restore) == .restored(to: 90))
         #expect(displays.changes.suffix(2) == [
             Change(displayID: 2, modeID: 90, scope: .session), Change(displayID: 2, modeID: 1, scope: .session),
         ])
         #expect(coordinator.pendingRestores.isEmpty)
+        #expect(log.endings == ["DELL P2419H back"])
+    }
+
+    /// A killed command tried mode 3 on monitor X, which went dark; monitor Y took its ID and
+    /// has the app's revert of 90 waiting, refused once. The revert built for X waits for it.
+    func revertOfAKilledCommandOnAMonitorThatAnotherReplaced() throws -> ModeSwitcher.PendingRestore {
+        var x = try #require(displays.displays().first { $0.id == 2 })
+        x.currentModeID = 3
+        let restore = try #require(ModeSwitcher.restore(undoing: 3, on: x, backTo: 1))
+        displays.goAway(2)
+        displays.replaceMonitor(serialNumber: 1234)
+        displays.comeBack(2, showing: 1)
+        displays.refused = [1]
+        countdown.answers.append { .revert }
+        coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
+        #expect(coordinator.pendingRestores.map(\.trialModeID) == [90])
+        return restore
+    }
+
+    /// Y takes its mode now: its revert is finished first, and X's then waits for X.
+    @Test func finishesTheRevertOfTheMonitorHereBeforeWaitingForTheOneAway() throws {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        let restore = try revertOfAKilledCommandOnAMonitorThatAnotherReplaced()
+        displays.refused = []
+        #expect(try coordinator.putBack(restore) == .waiting)
+        #expect(displays.changes.last == Change(displayID: 2, modeID: 1, scope: .session))
+        #expect(log.endings == ["DELL P2419H back"])
+        #expect(coordinator.pendingRestores.map(\.trialModeID) == [3])
+    }
+
+    /// Y still refuses: its revert keeps the ID and goes on being retried, and X's can't wait.
+    @Test func keepsTheRevertOfTheMonitorHereOverTheOneAway() throws {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        let restore = try revertOfAKilledCommandOnAMonitorThatAnotherReplaced()
+        #expect(throws: DisplayIDTaken.self) { try coordinator.putBack(restore) }
+        #expect(coordinator.pendingRestores.map(\.trialModeID) == [90])
+        #expect(log.endings.isEmpty)
+        displays.refused = []
+        coordinator.displaysDidChange()
+        #expect(displays.changes.last == Change(displayID: 2, modeID: 1, scope: .session))
         #expect(log.endings == ["DELL P2419H back"])
     }
 

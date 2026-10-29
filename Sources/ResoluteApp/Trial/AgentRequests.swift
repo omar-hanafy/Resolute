@@ -249,7 +249,15 @@ final class AgentRequests {
             var before = display
             before.currentModeID = request.previousModeID
             let history = model.history(from: request.requester.source)
-            switch model.modeChanges.putBack(restore) {
+            let progress: ModeSwitcher.RestoreProgress?
+            do {
+                progress = try model.modeChanges.putBack(restore)
+            } catch {
+                history.recordSwitch(of: before, to: trialMode, outcome: .failed(message: error.localizedDescription))
+                model.refresh()
+                return
+            }
+            switch progress {
             case .restored?:
                 history.recordSwitch(of: before, to: trialMode, outcome: .reverted(.unspecified))
             case .leftAlone?:
