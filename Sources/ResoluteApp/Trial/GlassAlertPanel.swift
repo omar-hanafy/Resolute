@@ -80,8 +80,8 @@ enum TrialPlacement {
     static func screen(for displayID: CGDirectDisplayID?) -> NSScreen? {
         let screens = NSScreen.screens
         let ids = screens.map(\.shownDisplayID)
-        let index = displayID.flatMap { index(of: $0, in: ids, mirroring: { CGDisplayMirrorsDisplay($0) }) }
-        return index.map { screens[$0] } ?? NSScreen.main ?? screens.first
+        let shown = displayID.flatMap { Self.index(of: $0, in: ids, mirroring: CGDisplayMirrorsDisplay) }
+        return shown.map { screens[$0] } ?? NSScreen.main ?? screens.first
     }
 
     /// The screen that shows `displayID`: its own, or, for a display in a mirror set, the

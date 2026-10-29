@@ -277,8 +277,12 @@ public final class AgentChannelServer: @unchecked Sendable {
         AgentChannel.log.error("Could not accept an agent connection: \(String(cString: strerror(code)), privacy: .public)")
         isPausingAccepts = true
         listener.suspend()
+        // Only its identity goes into the closure: a source isn't Sendable in older SDKs.
+        let paused = ObjectIdentifier(listener)
         queue.asyncAfter(deadline: .now() + 1) { [weak self] in
-            guard let self, self.isPausingAccepts, self.listener === listener else { return }
+            guard let self, self.isPausingAccepts, let listener = self.listener, ObjectIdentifier(listener) == paused else {
+                return
+            }
             self.isPausingAccepts = false
             listener.resume()
         }

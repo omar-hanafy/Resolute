@@ -444,12 +444,14 @@ import Testing
         var oneSecond = request
         oneSecond.trialSeconds = 1
         let short = oneSecond
-        let started = ContinuousClock.now
-        let progress = await onOwnThread {
-            Result { try client(folder).ask(short).waitForAnswer(until: .now + .seconds(10)) }
+        // Timed on its own thread: getting back to this task can take seconds on a busy runner.
+        let (progress, took) = await onOwnThread {
+            let started = ContinuousClock.now
+            let progress = Result { try client(folder).ask(short).waitForAnswer(until: .now + .seconds(10)) }
+            return (progress, ContinuousClock.now - started)
         }
         #expect(try progress.get() == .answered(.noAnswer(after: 1)))
-        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect(took < .seconds(5))
         #expect(await eventually { log.cancelledDialogs == 1 })
     }
 
@@ -566,12 +568,14 @@ import Testing
         defer { try? FileManager.default.removeItem(at: folder) }
         let silent = try listenWithoutAnswering(at: socket(in: folder))
         defer { close(silent) }
-        let started = ContinuousClock.now
-        let status = await onOwnThread {
-            AgentChannelClient(socket: socket(in: folder), responseTimeout: .milliseconds(200)).checkApp()
+        // Timed on its own thread: getting back to this task can take seconds on a busy runner.
+        let (status, took) = await onOwnThread {
+            let started = ContinuousClock.now
+            let status = AgentChannelClient(socket: socket(in: folder), responseTimeout: .milliseconds(200)).checkApp()
+            return (status, ContinuousClock.now - started)
         }
         #expect(status == .unavailable(AgentChannelError.timedOut.localizedDescription))
-        #expect(ContinuousClock.now - started < .seconds(2))
+        #expect(took < .seconds(2))
     }
 
     /// The command checks the answer itself too: a forged keep from something that is not
