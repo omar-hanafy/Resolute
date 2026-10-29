@@ -103,10 +103,12 @@ final class ModeChangeCoordinator {
             ResoluteLog.modes.notice("Ignored mode \(modeID) for display \(displayID), chosen while a countdown was up")
             return nil
         }
-        // A revert still waiting for this display goes first, so the new switch starts from
-        // the mode the person had rather than from the one on trial.
-        if waiting[displayID] != nil { attempt(displayID) }
         switchesUnderWay += 1
+        // A revert still waiting for this display goes first, so the new switch starts from
+        // the mode the person had rather than from the one on trial. What it reports waits
+        // for the switch: an alert before the countdown would let a request from `resolute`
+        // show its own question meanwhile.
+        if waiting[displayID] != nil { attempt(displayID) }
         let result = Result {
             // A switch for the session is a trial nobody is asked about, as `resolute set
             // --session` makes one.
@@ -183,8 +185,8 @@ final class ModeChangeCoordinator {
             ResoluteLog.modes.notice("Ignored the preset \(preset.name, privacy: .public), chosen while a countdown was up")
             return nil
         }
-        for displayID in waiting.keys { attempt(displayID) }
         switchesUnderWay += 1
+        for displayID in waiting.keys { attempt(displayID) }
         let result = PresetApplier(service: service).apply(preset)
         switchesUnderWay -= 1
         // The preset's switches replace the reverts of the displays it switched.
@@ -306,7 +308,7 @@ final class ModeChangeCoordinator {
                 onWaitEnded(entry.restore, .displayIsBack)
                 // A mode that never showed is reported once the display is back, as it is
                 // when the display stays.
-                if let notShown = entry.restore.failure { report(notShown) }
+                if let notShown = entry.restore.failure { reportOnceNoSwitchIsUnderWay(notShown) }
                 return
             }
         } catch {
@@ -321,7 +323,13 @@ final class ModeChangeCoordinator {
         switcher.giveUp(on: entry.restore, after: restoreTimeout)
         onWaitEnded(entry.restore, .gaveUp(failure ?? ResoluteError.displayDidNotReturn(display: entry.restore.displayName)))
         // A display that is back but refuses is shown; one that stayed away is only logged.
-        if let failure { report(failure) }
+        if let failure { reportOnceNoSwitchIsUnderWay(failure) }
+    }
+
+    /// Shows `error` now, or once the switch under way is over when a revert finished as it
+    /// began: an alert before its countdown, or over it, would hold up a question.
+    private func reportOnceNoSwitchIsUnderWay(_ error: any Error) {
+        afterSwitch { [weak self] in self?.report(error) }
     }
 
     /// A display that has only just come back may refuse a mode for a moment and then

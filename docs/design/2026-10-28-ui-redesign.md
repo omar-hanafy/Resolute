@@ -156,15 +156,17 @@ their Figma nodes. Compare each with its Figma frame in both appearances.
 - **Agents.** `resolute set --allow-hidden` asks the app over the agent channel; the app shows
   the trial dialog naming the agent, and only a person can keep. Settings › Command Line &
   Agents › Don't allow turns the command away at `hello`, before anything changes, and turns
-  a request away too. While a request's dialog is up, the app starts no trial of its own,
-  and the other way round. A command killed with its dialog up has its previous mode put
+  a request away too. While a request's dialog is up, the app starts no trial of its own
+  (an Undo that needs one says so), and the other way round. A command killed with its dialog up has its previous mode put
   back for the session, as its own revert would: else the display's default mode, never the
   mode on trial, and a display that is away is waited for as the app's own trials are.
   History says how its trial ended.
 - **Nothing over the countdown.** An alert, or a switch of its own, opened over the modal
   Keep/Revert dialog would hold up its revert until closed. So while a switch is under way,
   alerts, Sharp Scaling's switch after a reconnect, the restore for a vanished command and a
-  notification's Undo wait (`ModeChangeCoordinator.afterSwitch`) and run once it is over.
+  notification's Undo wait (`ModeChangeCoordinator.afterSwitch`) and run once it is over. So
+  does the alert of a waiting revert that finishes as a new switch begins: shown before its
+  countdown, it would let a request from `resolute` put up a second question.
 - **Every trial in History.** A trial whose display went dark is recorded once its revert
   stops waiting, however that ends: the display back, Stop Waiting, given up, replaced by
   a new choice or a preset, or Resolute quitting. A display that takes the ID of one still

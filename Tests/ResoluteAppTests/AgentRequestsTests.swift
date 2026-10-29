@@ -367,6 +367,42 @@ final class FakeTrialScreen {
         #expect(change.from?.modeID == dell.currentModeID)
     }
 
+    /// An Undo that would try a hidden mode while a request's dialog is up changes nothing,
+    /// as a hidden mode chosen then does, and says why: the dialog stays clickable over the
+    /// alert and keeps counting down.
+    @Test func saysWhyAnUndoWaitsWhileADialogIsUp() async throws {
+        let service = FakeDisplayService()
+        let scratch = ScratchDefaults()
+        let answers = TrialAnswers()
+        let errors = ShownErrors()
+        let model = AppModelTests.makeModel(
+            service: service, preferences: Preferences(defaults: scratch.defaults), answers: answers, errors: errors,
+            overridesRoot: FileManager.default.temporaryDirectory.appending(path: "ResoluteAgentUndo-\(UUID().uuidString)")
+        )
+        let dell = FakeDisplayService.dell
+        let hidden = try #require(dell.modes.first { $0.origin == .hidden })
+        answers.keeps = true
+        model.apply(hidden, to: dell)
+        let listed = try #require(dell.modes.first { $0.origin == .system && $0.modeID != dell.currentModeID })
+        model.apply(listed, to: try #require(model.displays.first { $0.id == dell.id }))
+        // Undoing it goes back to the hidden mode, which is tried first.
+        let change = try #require(model.historyEntries.first)
+        let requests = screen.requests(clock: clock)
+        model.agentRequests = requests
+        let request = request
+        let answer = Task { await requests.answer(request) }
+        let dialog = try await screen.dialog()
+        let switches = service.changes.count
+
+        model.undo(change, from: .panel)
+
+        #expect(service.changes.count == switches)
+        #expect(errors.titles == ["The change could not be undone"])
+        #expect(errors.messages == [AppModel.undoWaitsForAQuestion])
+        dialog.revert()
+        _ = await answer.value
+    }
+
     /// The mode before the trial does not take (a hidden one the display reports late, or
     /// refuses): the display's default mode comes back, as the command's own revert would put
     /// it, never the mode on trial that nobody kept.

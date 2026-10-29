@@ -83,6 +83,10 @@ extension AppModel {
         }
     }
 
+    /// Why an Undo that tries a hidden mode can't start while the dialog of a request from
+    /// `resolute` is up.
+    static let undoWaitsForAQuestion = "Resolute is asking about another display setting. Try again once it’s answered."
+
     /// Undo: puts back what `entry` replaced, asked for from `source`. A hidden mode is tried
     /// first, as any hidden mode is. Says why when it can't be undone.
     func undo(_ entry: HistoryEntry, from source: HistoryEntry.Source = .panel) {
@@ -100,6 +104,8 @@ extension AppModel {
             case .failure(let error)?:
                 recorder.recordFailedUndo(of: entry, plan: plan, error: error)
             case nil:
+                // A request from `resolute` is being asked about, and its dialog holds trials.
+                showError(UndoUnavailable(reason: Self.undoWaitsForAQuestion), "The change could not be undone")
                 return
             }
         case .setMirroring(let isOn):

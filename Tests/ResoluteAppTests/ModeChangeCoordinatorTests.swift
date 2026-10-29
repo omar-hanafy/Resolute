@@ -458,6 +458,30 @@ final class CoordinatorLog {
         #expect(coordinator.pendingRestores.map(\.modeID) == [3])
     }
 
+    /// A revert that finishes as a new switch of its display starts says what went wrong
+    /// once that switch is over: an alert before its countdown would let a request from
+    /// `resolute` show its own question meanwhile, two questions at once.
+    @Test func reportsAWaitingRevertsFailureOnceTheNextSwitchIsOver() {
+        // The monitor drops off before the mode shows: its revert waits, with that failure.
+        displays.dropMonitor(whenSwitchedTo: 90)
+        coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
+        #expect(coordinator.pendingRestores.count == 1)
+        displays.comeBack(2)
+        var seenDuringTheSwitch: [ResoluteError]?
+        let reports = reports
+        countdown.answers.append {
+            seenDuringTheSwitch = reports.errors
+            return .revert
+        }
+
+        coordinator.apply(modeID: 3, to: 2, needsConfirmation: true)
+
+        #expect(seenDuringTheSwitch == [])
+        #expect(coordinator.pendingRestores.isEmpty)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        #expect(reports.errors == [.modeNotApplied(display: "DELL P2419H")])
+    }
+
     /// A mode chosen while a countdown is up is ignored, with the revert waiting for its
     /// display: either could open an alert or a second countdown over the first, holding
     /// up its revert until closed.
