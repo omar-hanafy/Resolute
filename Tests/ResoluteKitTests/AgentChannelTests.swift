@@ -488,8 +488,15 @@ import Testing
         let busy = AgentChannel.Problem(.busy, "Try again shortly.")
         try UnixSocket.write(try AgentChannel.line(AgentChannel.AppMessage.error(busy)), to: app, until: .now + .seconds(2))
         close(app)
-        #expect(throws: AgentChannelError.refused(busy)) {
+        // The message usually can't go out any more, so sending fails with the reason. On a
+        // busy Mac the closed end may not be torn down yet, so the message goes out and the
+        // reason is the reply, as the command then reads it.
+        do {
             try AgentChannelClient.send(.hello, on: descriptor, until: .now + .seconds(2))
+            var buffer = LineBuffer()
+            #expect(try AgentChannelClient.reply(on: descriptor, into: &buffer, until: .now + .seconds(2)) == .error(busy))
+        } catch {
+            #expect(error as? AgentChannelError == .refused(busy))
         }
     }
 
