@@ -107,7 +107,10 @@ Resolute logs each mode switch and each change to an override file. `log show --
 
 macOS reads per-display override files from `/Library/Displays/Contents/Resources/Overrides`. A display's **Custom Resolutions** tab in the window, and `resolute overrides`, edit the `scale-resolutions` list in those files, so you can add modes a display does not offer, such as 2560 × 1080 HiDPI on a 5120 × 2160 monitor. Its **Picture & Name** tab sets the name macOS shows for the display and the picture System Settings › Displays draws for it, in the same file.
 
-<img src="docs/images/custom-resolutions.png" width="860" alt="The Custom Resolutions window: the connected built-in display and an example installed override listing 5120 × 2160 1× and 2560 × 1080 HiDPI, with Add Resolution, Remove Override… and Show in Finder">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/custom-resolutions-dark.png">
+  <img src="docs/images/custom-resolutions.png" width="860" alt="A display's Custom Resolutions tab in the window: the DELL U2723QE's installed override lists 5120 × 2160 1× and 2560 × 1080 HiDPI, with Add Resolution…, Remove, Restore Backup…, Remove Override… and Show in Finder">
+</picture>
 
 - The list shows every entry in the file, in the file's order. Adding a HiDPI resolution also adds a 1× entry at its rendered size, as RDM did, unless the list has one; removing the HiDPI entry removes that 1× entry only if it was added with it in the same edit. Removing a 1× entry that a HiDPI entry renders at gets a note, with a way to put it back.
 - Saving asks for an administrator password. The file being replaced is first copied to `/Library/Application Support/Resolute/Backups`. **Restore Backup…** (or `sudo resolute overrides restore`) puts one back, and `sudo resolute overrides prune` deletes old ones.
@@ -158,7 +161,7 @@ make icon        # regenerates Resources/AppIcon.icns
 
 CI (`.github/workflows/ci.yml`) checks Apple silicon on macOS 15/Xcode 16, macOS 26/Xcode 26, and the hosted Xcode 27 preview, lints and runs the tests on every push to `main` and every pull request, but only while the repo is public; while it's private, a run only happens when a maintainer starts one by hand.
 
-`Resolute.app/Contents/MacOS/Resolute --dump-menu` prints the menu as it would appear, and `--render-editor file.png` captures the Custom Resolutions window without showing it (the terminal needs the Screen Recording permission); `docs/images/custom-resolutions.png` is one such capture.
+`Resolute.app/Contents/MacOS/Resolute --dump-menu` prints the menu as it would appear, and `--render-editor file.png` captures the Custom Resolutions window without showing it (the terminal needs the Screen Recording permission). `Scripts/render-gallery.sh <folder>` draws every scene of the design gallery with sample displays, in Light and Dark; the pictures in `docs/images` are its `displays.custom-resolutions.saved` scene.
 
 ## Credits
 
