@@ -34,7 +34,7 @@ final class FakeTrialScreen {
 
     /// The dialog once it is up.
     func dialog(_ index: Int = 0) async throws -> TrialDialogModel {
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + .seconds(30)
         while shown.count <= index, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(5))
         }

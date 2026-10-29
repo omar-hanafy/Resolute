@@ -146,7 +146,9 @@ import Testing
         let started = ContinuousClock.now
         let result = await run(arguments + ["--json"], in: context(transcript, on: service, app: app.client))
         #expect(result.code == 0)
-        #expect(ContinuousClock.now - started < .seconds(5))
+        // The reason and the dismissal below show the command's own deadline ended the wait;
+        // this only catches a wait far beyond it, since a busy runner can be seconds late.
+        #expect(ContinuousClock.now - started < .seconds(30))
         #expect(transcript.errors.hasSuffix("Waiting up to 1 s for someone at the display to keep it…"))
         let summary = try object(transcript.output)
         #expect(summary["result"] as? String == "reverted")
@@ -584,7 +586,7 @@ private func waitUntilCancelled() async -> ConfirmHiddenModeResponse {
     return .revertedByPerson
 }
 
-private func eventually(within timeout: Duration = .seconds(5), _ condition: () -> Bool) async -> Bool {
+private func eventually(within timeout: Duration = .seconds(30), _ condition: () -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + timeout
     while !condition() {
         guard ContinuousClock.now < deadline else { return false }

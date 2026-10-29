@@ -143,7 +143,7 @@ enum PanelContent {
     }
 
     /// "Built-in" for a built-in display in a mirror set's name, as the design writes it.
-    static func shortName(of display: Display) -> String {
+    nonisolated static func shortName(of display: Display) -> String {
         display.isBuiltin ? "Built-in" : display.name
     }
 

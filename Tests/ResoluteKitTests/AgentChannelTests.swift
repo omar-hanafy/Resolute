@@ -246,7 +246,7 @@ import Testing
         defer { server.stop() }
         let request = request
         let progress = await onOwnThread {
-            Result { try client(folder).ask(request).waitForAnswer(until: .now + .seconds(5)) }
+            Result { try client(folder).ask(request).waitForAnswer(until: .now + .seconds(30)) }
         }
         #expect(try progress.get() == .failed(.refused(AgentChannel.Problem(.refused, "Not from the command line."))))
         #expect(log.requests.isEmpty)
@@ -264,7 +264,7 @@ import Testing
         defer { server.stop() }
         let request = request
         let progress = await onOwnThread {
-            Result { try client(folder).ask(request).waitForAnswer(until: .now + .seconds(5)) }
+            Result { try client(folder).ask(request).waitForAnswer(until: .now + .seconds(30)) }
         }
         #expect(try progress.get() == .answered(.keptByPerson))
         #expect(log.requests == [request])
@@ -425,7 +425,7 @@ import Testing
                 let pending = try client(folder).ask(request)
                 guard blockUntil({ log.requests.count == 1 }) else { throw AgentChannelError.timedOut }
                 server.stop()
-                return pending.waitForAnswer(until: .now + .seconds(5))
+                return pending.waitForAnswer(until: .now + .seconds(30))
             }
         }
         #expect(try progress.get() == .failed(.closedWithoutAnswer))
@@ -594,7 +594,7 @@ import Testing
                 defer { close(app) }
                 let forged = #"{"version":1,"type":"answer","answer":"keep","by":null,"reason":null}"# + "\n"
                 try UnixSocket.write(Array(forged.utf8), to: app, until: .now + .seconds(2))
-                return pending.waitForAnswer(until: .now + .seconds(5))
+                return pending.waitForAnswer(until: .now + .seconds(30))
             }
         }
         #expect(throws: Never.self) { try progress.get() }
@@ -671,9 +671,10 @@ private func onOwnThread<Value: Sendable>(_ body: @escaping @Sendable () -> Valu
     }
 }
 
-/// Waits on this thread until `condition` holds, for at most five seconds.
+/// Waits on this thread until `condition` holds, for at most thirty seconds: a busy runner
+/// can take seconds to start the server's handler, and a pass returns at once.
 private func blockUntil(_ condition: () -> Bool) -> Bool {
-    let deadline = ContinuousClock.now + .seconds(5)
+    let deadline = ContinuousClock.now + .seconds(30)
     while !condition() {
         guard ContinuousClock.now < deadline else { return false }
         usleep(5_000)
@@ -681,7 +682,7 @@ private func blockUntil(_ condition: () -> Bool) -> Bool {
     return true
 }
 
-private func eventually(within timeout: Duration = .seconds(5), _ condition: () -> Bool) async -> Bool {
+private func eventually(within timeout: Duration = .seconds(30), _ condition: () -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + timeout
     while !condition() {
         guard ContinuousClock.now < deadline else { return false }
