@@ -25,20 +25,59 @@ import Testing
         }.count
     }
 
-    @Test func startsWithTheDisplayAndItsCurrentMode() throws {
+    @Test func startsWithTheDisplayAndItsSizesAtHand() throws {
         let nodes = MenuModel.build(displays: [display], settings: MenuSettings())
         #expect(nodes.first == .header("Built-in Retina Display"))
-        let resolution = try #require(item(nodes, titled: "1728 × 1117"))
-        #expect(resolution.subtitle == "HiDPI · 3456 × 2234 pixels")
-        let refresh = try #require(item(nodes, titled: "120 Hz"))
+        // The panel's Larger Text ↔ More Space stops, larger first, the one in use checked.
+        let sizes = nodes.dropFirst().prefix { node in
+            if case .item(let item) = node { return item.submenu == nil }
+            return false
+        }
+        #expect(sizes.compactMap { node -> String? in
+            if case .item(let item) = node { return (item.isChecked ? "✓ " : "") + item.title }
+            return nil
+        } == ["2056 × 1329", "✓ 1728 × 1117 — Default", "1496 × 967", "1312 × 848", "1168 × 755"])
+        guard case .applyMode(1, _, false)? = item(nodes, titled: "1496 × 967")?.action else {
+            Issue.record("1496 × 967 does not switch the display")
+            return
+        }
+        #expect(item(nodes, titled: "More Resolutions")?.submenu != nil)
+        let refresh = try #require(item(nodes, titled: "Refresh Rate: 120 Hz"))
         #expect(refresh.submenu?.count == 6)
         #expect(item(refresh.submenu ?? [], titled: "60 Hz")?.action
             == .applyMode(displayID: 1, modeID: 55, needsConfirmation: false))
     }
 
+    @Test func endsWithTheAppsActions() {
+        let nodes = MenuModel.build(displays: [display], settings: MenuSettings())
+        #expect(item(nodes, titled: "Open Resolute")?.action == .openWindow)
+        #expect(item(nodes, titled: "Settings…")?.action == .openSettings)
+        #expect(item(nodes, titled: "Settings…")?.keyEquivalent == ",")
+        #expect(item(nodes, titled: "Quit Resolute")?.keyEquivalent == "q")
+        // macOS 27 hides menu item images, so the menu has none.
+        func images(_ nodes: [MenuNode]) -> [String] {
+            nodes.flatMap { node -> [String] in
+                guard case .item(let item) = node else { return [] }
+                return (item.symbolName.map { [$0] } ?? []) + images(item.submenu ?? [])
+            }
+        }
+        #expect(images(nodes).isEmpty)
+    }
+
+    @Test func offersAStandardDisplaysSizeInUseDefaultAndNative() {
+        let fullHD = TestData.fullHD()
+        let titles = MenuModel.build(displays: [fullHD], settings: MenuSettings()).compactMap { node -> String? in
+            if case .item(let item) = node, item.submenu == nil, item.action != nil { return item.title }
+            return nil
+        }
+        // The size in use first; the hidden 2560 × 1440 only under More Resolutions.
+        #expect(titles.first?.hasPrefix("1920 × 1080") == true)
+        #expect(!titles.contains { $0.hasPrefix("2560 × 1440") })
+    }
+
     @Test func checksTheCurrentResolutionAndBadgesIt() throws {
         let nodes = MenuModel.build(displays: [display], settings: MenuSettings())
-        let submenu = try #require(item(nodes, titled: "1728 × 1117")?.submenu)
+        let submenu = try #require(item(nodes, titled: "More Resolutions")?.submenu)
         let current = try #require(item(submenu, titled: "1728 × 1117"))
         #expect(current.isChecked)
         #expect(current.badge == "Default")
@@ -52,37 +91,35 @@ import Testing
 
     @Test func omitsLowResolutionModesWhenTurnedOff() throws {
         let off = MenuModel.build(displays: [display], settings: MenuSettings(showLowResolutionModes: false))
-        let submenu = try #require(item(off, titled: "1728 × 1117")?.submenu)
+        let submenu = try #require(item(off, titled: "More Resolutions")?.submenu)
         #expect(!submenu.contains(.header("Low Resolution (1×)")))
         #expect(item(submenu, titled: "3456 × 2234") == nil)
-        #expect(item(off, titled: "Show Low-Resolution Modes")?.isChecked == false)
-        #expect(item(off, titled: "Show Low-Resolution Modes")?.action == .toggleLowResolutionModes)
     }
 
     @Test func showsModeIDsAndHiddenModesWithDetails() throws {
         let fullHD = TestData.fullHD()
-        let plain = try #require(item(MenuModel.build(displays: [fullHD], settings: MenuSettings()), titled: "1920 × 1080")?.submenu)
+        let plain = try #require(item(MenuModel.build(displays: [fullHD], settings: MenuSettings()), titled: "More Resolutions")?.submenu)
         // Two hidden modes, but one is a 75 Hz rate of a listed resolution: ⌥ adds one resolution.
         #expect(item(plain, titled: "Hold ⌥ to Show Hidden Resolutions (1)")?.isEnabled == false)
         #expect(!plain.contains(.header("Hidden")))
 
         let detailed = try #require(item(
             MenuModel.build(displays: [fullHD], settings: MenuSettings(showsDetails: true)),
-            titled: "1920 × 1080  #1"
+            titled: "More Resolutions"
         )?.submenu)
         #expect(detailed.contains(.header("Hidden")))
         let hidden = try #require(item(detailed, titled: "2560 × 1440  #91"))
         #expect(hidden.action == .applyMode(displayID: 2, modeID: 91, needsConfirmation: true))
-        #expect(hidden.symbolName == "exclamationmark.triangle")
+        #expect(hidden.badge == "Hidden")
     }
 
     @Test func pointsAtHiddenRefreshRatesWhenThereAreNoHiddenResolutions() throws {
         var fullHD = TestData.fullHD()
         fullHD.modes.removeAll { $0.modeID == 91 }
-        let submenu = try #require(item(MenuModel.build(displays: [fullHD], settings: MenuSettings()), titled: "1920 × 1080")?.submenu)
+        let submenu = try #require(item(MenuModel.build(displays: [fullHD], settings: MenuSettings()), titled: "More Resolutions")?.submenu)
         #expect(item(submenu, titled: "Hold ⌥ to Show Hidden Refresh Rates")?.isEnabled == false)
         fullHD.modes.removeAll { $0.origin == .hidden }
-        let none = try #require(item(MenuModel.build(displays: [fullHD], settings: MenuSettings()), titled: "1920 × 1080")?.submenu)
+        let none = try #require(item(MenuModel.build(displays: [fullHD], settings: MenuSettings()), titled: "More Resolutions")?.submenu)
         #expect(!none.contains { node in
             if case .item(let item) = node { return item.title.hasPrefix("Hold ⌥") }
             return false
@@ -115,7 +152,7 @@ import Testing
         untrusted.privateModes = .untrusted(reason: "record 3 has an unrecognised layout")
         let submenu = try #require(item(
             MenuModel.build(displays: [untrusted], settings: MenuSettings(showsDetails: true)),
-            titled: "1728 × 1117  #54"
+            titled: "More Resolutions"
         )?.submenu)
         #expect(item(submenu, titled: "Hidden Modes Unavailable")?.subtitle == "record 3 has an unrecognised layout")
     }
@@ -138,9 +175,13 @@ import Testing
     @Test func rendersWithoutACurrentMode() throws {
         let unknown = capture.display(currentModeID: 9_999)
         let nodes = MenuModel.build(displays: [unknown], settings: MenuSettings())
-        let resolution = try #require(item(nodes, titled: "Choose a Resolution"))
+        let resolution = try #require(item(nodes, titled: "More Resolutions"))
         #expect(checkedCount(resolution.submenu ?? []) == 0)
-        #expect(item(nodes, titled: "120 Hz") == nil)
+        #expect(checkedCount(nodes) == 0)
+        #expect(!MenuModel.render(nodes).contains("Refresh Rate"))
+        // A display with no listed modes at all can still be chosen from.
+        let empty = Display(id: 8, name: "Empty", currentModeID: nil, modes: [])
+        #expect(item(MenuModel.build(displays: [empty], settings: MenuSettings()), titled: "Choose a Resolution") != nil)
     }
 
     @Test func omitsRefreshRateWhenUnknown() {
@@ -159,13 +200,6 @@ import Testing
         #expect(item(nodes, titled: "Quit Resolute")?.keyEquivalent == "q")
     }
 
-    @Test func describesLaunchAtLoginStates() {
-        #expect(MenuModel.launchAtLoginItem(.enabled).isChecked)
-        #expect(!MenuModel.launchAtLoginItem(.disabled).isChecked)
-        #expect(MenuModel.launchAtLoginItem(.requiresApproval).subtitle == "Needs approval in System Settings")
-        #expect(!MenuModel.launchAtLoginItem(.unavailable).isEnabled)
-    }
-
     @Test func rendersAPlainTextDump() {
         let small = Display(id: 9, name: "Tiny", isMain: true, currentModeID: 1, modes: [
             TestData.mode(1, 1280, 800, scale: 2, hz: 60, flags: 0x7),
@@ -174,23 +208,21 @@ import Testing
         ])
         let expected = """
             # Tiny
-              1280 × 800 — HiDPI · 2560 × 1600 pixels ▸
+              2560 × 1600 — Native
+            ✓ 1280 × 800 — Default
+              More Resolutions ▸
                 # HiDPI
                 ✓ 1280 × 800 [Default]
                 # Low Resolution (1×)
                   2560 × 1600 [Native]
                 ---
                   Custom Resolutions…
-              60 Hz ▸
+              Refresh Rate: 60 Hz ▸
                 ✓ 60 Hz
                   30 Hz
             ---
-              Custom Resolutions…
-            ---
-            ✓ Show Low-Resolution Modes
-              Launch at Login
-            ---
-              About Resolute
+              Open Resolute
+              Settings…
               Quit Resolute
             """
         #expect(MenuModel.render(MenuModel.build(displays: [small], settings: MenuSettings())) == expected)

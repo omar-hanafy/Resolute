@@ -8,13 +8,15 @@ Resolute is a Swift menu-bar app and command-line tool inspired by [RDM](https:/
 
 ## What it does
 
-- **Validated modes in one menu.** HiDPI ("looks like") resolutions, low-resolution 1× modes such as your panel's full native resolution, and, while you hold ⌥, additional modes hidden from System Settings.
-- **Refresh rates.** Switch between 120, 60, 59.94, 50, 48 and 47.95 Hz, or whatever your display offers, without changing the resolution.
-- **Recoverable hidden-mode trials.** A hidden mode is tried for the current session and reverts after 15 seconds unless you choose Keep or type `y` in an interactive terminal. Ctrl-C, terminal hangup and termination requests trigger recovery too. If the display disconnects or refuses recovery, Resolute retries and explains the remaining recovery path. Force Quit, a crash or a powered-off display can prevent automatic recovery; logging out ends a session trial.
-- **Mirroring** on or off with one click.
-- **Custom HiDPI resolutions** through display override files, like RDM's editor, with backups you can restore.
-- **A command-line tool,** `resolute`, for scripts and shortcuts, with [JSON output](docs/json.md) and a `resolute doctor` report for bug reports.
-- **Launch at Login.**
+- **A menu bar panel.** One card per display with its picture, five sizes from Larger Text to More Space that switch in one click, and its refresh rates; All Resolutions lists every mode, with HiDPI and 1× tabs and, on request, modes macOS hides.
+- **Recoverable hidden-mode trials.** A hidden mode is tried for the session on its own display, with Keep and Revert and a countdown (15 seconds by default); Revert is the default and doing nothing reverts. A kept hidden mode lasts until you log out. If the display goes dark, Resolute waits for it and puts the previous mode back.
+- **Presets** for every display and mirroring, from the panel, a keyboard shortcut, the Dock or `resolute preset`.
+- **History with Undo.** Every switch from the app and the command line, kept for 7 days with who asked for it.
+- **Agents can ask, people keep.** `resolute set --allow-hidden` from an agent shows the Keep/Revert dialog on the display, naming the agent; only a person can keep the mode.
+- **The window:** a page per display (Resolution, Custom Resolutions, Picture & Name), displays that are not connected, Presets, History and Settings.
+- **Custom HiDPI resolutions, pictures and names** through display override files, like RDM's editor, with backups you can restore.
+- **Sharp Scaling** adds Retina-style sizes to standard 1080p and 1440p monitors.
+- **A command-line tool,** `resolute`, for scripts and agents, with [JSON output](docs/json.md) and a `resolute doctor` report for bug reports.
 
 ## Requirements
 
@@ -47,14 +49,25 @@ If you used RDM, quit it and remove it from System Settings › General › Logi
 
 To uninstall, run `make uninstall`. It quits the app, turns off Launch at Login, then removes the app, its preferences and its command-line link. Custom display overrides and their backups remain; restore or remove overrides before uninstalling if you want to undo them. (An app older than 0.2 can't turn Launch at Login off for it, so the script says where to do that.)
 
-## The menu
+## The menu bar panel
 
-Click the display icon in the menu bar. Each display shows its current resolution and refresh rate; both open a submenu.
+Click the display icon in the menu bar, or press ⌃⌥R from anywhere (Settings › General changes the shortcut). Each display has a card, the one with the menu bar first; mirrored displays share one.
 
-- **HiDPI** resolutions use a larger render buffer for readable text. The menu shows logical workspace size; its pixel dimensions describe the render buffer, not the panel or cable signal. Downsampling to a lower-resolution panel can still soften fine detail.
-- **Low Resolution (1×)** modes draw one pixel per point. On a Retina display this is how you get the panel's full native resolution (3456 × 2234 on a 16-inch MacBook Pro), at the cost of very small text. Turn the section off with **Show Low-Resolution Modes**.
-- **Default** marks macOS's default mode and **Native** the panel's native size.
-- Hold **⌥** while opening the menu to see hidden modes, mode IDs and pixel sizes. macOS may keep a hidden mode only until you log out, even after you choose Keep.
+- **Larger Text ↔ More Space**: five HiDPI sizes that match the display's shape, switched in one click. A standard (non-Retina) display offers its resolutions in a pop-up instead, and Sharp Scaling when it can have it.
+- **All Resolutions** lists every mode. **HiDPI** resolutions use a larger render buffer for readable text; **Low Resolution (1×)** modes draw one pixel per point, which on a Retina display is how you get the panel's full native resolution. **Default** marks macOS's default mode and **Native** the panel's native size.
+- **Show Hidden Modes** lists modes macOS doesn't. Each is tried for the trial length first and switches back unless you keep it. Hold **⌥** while clicking the menu bar icon to see them once, with mode numbers and pixel sizes.
+- Below the cards: your presets, the last change an agent or the command line made (with Undo), Mirror Displays, Custom Resolutions…, Settings… and Quit Resolute.
+
+Right-click or Control-click the icon for the classic menu, which keyboard and VoiceOver users may prefer. While a hidden mode is on trial the icon turns orange and counts down; while a display that went dark is awaited, it shows a waiting state.
+
+## The window
+
+The window opens from the panel's title, a display's card, or Settings… (⌘,). Resolute is in the Dock and ⌘Tab while it is open; ⌘Q closes it, and Quit Resolute in the panel (or ⌃⌥⌘Q) quits.
+
+- **Resolution**: the same sizes and refresh rates as the panel, and every mode in a table.
+- **Custom Resolutions** and **Picture & Name** edit the display's override file (below). One Save writes them together.
+- **Not Connected** lists displays that have an override file but aren't plugged in, so you can edit theirs too.
+- **Presets**, **History** and **Settings** (General, Command Line & Agents, About).
 
 ## The command line
 
@@ -69,13 +82,22 @@ $ resolute set 3456x2234@1x       # the native resolution at 1×
 $ resolute set --refresh 60       # keeps the resolution
 $ resolute set --default
 $ resolute set 1920x1080 -d DELL --session   # another display, until you log out
-$ resolute set --mode-id <id> --allow-hidden  # a hidden mode from `resolute modes --all --raw`: kept only if you type y
+$ resolute set --mode-id <id> --allow-hidden  # a hidden mode from `resolute modes --all --raw`: kept only if a person keeps it
 $ resolute mirror toggle
+$ resolute preset save Coding     # every display's mode now, and mirroring
+$ resolute preset apply Coding    # listed modes only; --dry-run shows what would change
+$ resolute history                # the last 7 days of changes, from the app and the command line
+$ resolute scaling plan -d ASUS   # sharp, Retina-style sizes for a 1080p or 1440p monitor
+$ sudo resolute scaling on -d ASUS
 $ resolute displays --json
 $ resolute doctor                 # versions, displays, modes and overrides, for a bug report
 ```
 
 `-d` takes `main`, an index from `resolute displays`, `id:<number>`, or part of a display's name. `resolute help <command>` explains the rest.
+
+Only a person can keep a hidden mode. When the Resolute app is running, `resolute set --allow-hidden` asks on the display being tried, in the app's Keep/Revert dialog, which names the agent or terminal that asked; otherwise it asks in the terminal, and with neither it changes nothing. A kept hidden mode lasts until you log out. Ctrl-C reverts and closes the dialog, and `set --json` says how the trial ended.
+
+Every switch from the app and the command line is kept in History for 7 days, with who asked for it: `resolute history` lists it, and the app's History page can undo it.
 
 With `--json`, every key is always present, with `null` when there is no value; [docs/json.md](docs/json.md) lists them. Vendor and product IDs are hex strings, the way `--vendor` and `--product` take them. `resolute --generate-completion-script zsh` (or `bash`, `fish`) prints shell completions.
 
@@ -83,7 +105,7 @@ Resolute logs each mode switch and each change to an override file. `log show --
 
 ## Custom resolutions
 
-macOS reads per-display override files from `/Library/Displays/Contents/Resources/Overrides`. The **Custom Resolutions…** window, and `resolute overrides`, edit the `scale-resolutions` list in those files, so you can add modes a display does not offer, such as 2560 × 1080 HiDPI on a 5120 × 2160 monitor.
+macOS reads per-display override files from `/Library/Displays/Contents/Resources/Overrides`. A display's **Custom Resolutions** tab in the window, and `resolute overrides`, edit the `scale-resolutions` list in those files, so you can add modes a display does not offer, such as 2560 × 1080 HiDPI on a 5120 × 2160 monitor. Its **Picture & Name** tab sets the name macOS shows for the display and the picture System Settings › Displays draws for it, in the same file.
 
 <img src="docs/images/custom-resolutions.png" width="860" alt="The Custom Resolutions window: the connected built-in display and an example installed override listing 5120 × 2160 1× and 2560 × 1080 HiDPI, with Add Resolution, Remove Override… and Show in Finder">
 

@@ -19,14 +19,16 @@ import Testing
         menu.items.flatMap { [$0] + ($0.submenu.map(items) ?? []) }
     }
 
-    @Test func tellsVoiceOverWhichModesAreHidden() throws {
+    /// Hidden modes say so in words, in a badge VoiceOver reads, since the menu has no images.
+    @Test func marksHiddenModesInWords() throws {
         let menu = NSMenu()
         MenuRenderer.fill(
             menu, with: MenuModel.build(displays: [display], settings: MenuSettings(showsDetails: true)),
             target: nil, action: nil
         )
         let hidden = try #require(items(menu).first { $0.title.hasPrefix("2560 × 1440") })
-        #expect(hidden.image?.accessibilityDescription == "Hidden mode")
+        #expect(hidden.badge?.stringValue == "Hidden")
+        #expect(hidden.image == nil)
     }
 
     @Test func describesOnlySymbolsThatCarryMeaning() {

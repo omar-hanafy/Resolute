@@ -309,6 +309,20 @@ public struct ModeSwitcher: Sendable {
         return current
     }
 
+    /// The revert of a trial of `trialModeID` on `display` that no switch of its own will
+    /// finish, such as one a killed command left: `previousModeID`, else the display's
+    /// default mode, as `finish(_:)` puts them back, never the mode on trial. `display` gives
+    /// the modes and the identity, so a snapshot from while it was connected will do. Nil
+    /// when neither mode is known.
+    public static func restore(
+        undoing trialModeID: Int32, on display: Display, backTo previousModeID: Int32?
+    ) -> PendingRestore? {
+        guard let restore = restore(
+            on: display.id, named: display.name, before: display, previous: previousModeID, trial: trialModeID, failure: nil
+        ), restore.previousMode != nil || restore.fallbackMode != nil else { return nil }
+        return restore
+    }
+
     /// What undoing a trial of `modeID` puts back: the mode in use before, else the default
     /// one. Nil when neither is known.
     private static func restore(

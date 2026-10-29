@@ -20,7 +20,8 @@ struct MirrorCommand: ParsableCommand, ContextCommand {
 
     func run(in context: CommandContext) throws {
         let service = context.service
-        let mirroring = service.displays().contains(where: \.isInMirrorSet)
+        let displays = service.displays()
+        let mirroring = displays.contains(where: \.isInMirrorSet)
         let enable: Bool
         switch state {
         case .status:
@@ -30,7 +31,16 @@ struct MirrorCommand: ParsableCommand, ContextCommand {
         case .off: enable = false
         case .toggle: enable = !mirroring
         }
-        try service.setMirroring(enable)
+        do {
+            try service.setMirroring(enable)
+        } catch {
+            // As the app records a mirroring change that failed.
+            context.history.recordMirroring(enable, displays: displays, failedWith: error)
+            throw error
+        }
+        if enable != mirroring {
+            context.history.recordMirroring(enable, displays: displays)
+        }
         context.write(enable ? "Mirroring is on." : "Mirroring is off.")
     }
 }

@@ -63,8 +63,10 @@ public struct PropertyListDictionary: Equatable, Sendable {
 
     public var keys: [String] { dictionary.keys.sorted() }
 
+    /// Equal bytes need no decoding: a copy that nothing changed, as an editor's working copy
+    /// usually is, compares without it.
     public static func == (lhs: PropertyListDictionary, rhs: PropertyListDictionary) -> Bool {
-        NSDictionary(dictionary: lhs.dictionary).isEqual(to: rhs.dictionary)
+        lhs.archive == rhs.archive || NSDictionary(dictionary: lhs.dictionary).isEqual(to: rhs.dictionary)
     }
 }
 
@@ -79,6 +81,9 @@ public struct DisplayOverride: Equatable, Sendable {
     public var key: OverrideKey
     /// Replaces the display's name in macOS; nil keeps the display's own name.
     public var productName: String?
+    /// How macOS draws the display: its icon, and its picture in System Settings › Displays.
+    /// Its keys replace any of the same name in `otherKeys` when the file is written.
+    public var picture: Picture
     public var resolutions: [ScaleResolution]
     /// Every other key in the file, written back unchanged.
     public var otherKeys: PropertyListDictionary
@@ -90,15 +95,24 @@ public struct DisplayOverride: Equatable, Sendable {
     public init(
         key: OverrideKey,
         productName: String? = nil,
+        picture: Picture = .none,
         resolutions: [ScaleResolution] = [],
         otherKeys: PropertyListDictionary = .empty,
         isNew: Bool = true
     ) {
         self.key = key
         self.productName = productName
+        self.picture = picture
         self.resolutions = resolutions
         self.otherKeys = otherKeys
         self.isNew = isNew
+    }
+
+    /// The icon file macOS shows for the display (`display-icon`); nil leaves it to macOS.
+    /// Setting it leaves the rest of `picture` as it is.
+    public var displayIcon: String? {
+        get { picture.icon }
+        set { picture.icon = newValue }
     }
 
     /// Reads an override file's contents.
@@ -118,14 +132,16 @@ public struct DisplayOverride: Equatable, Sendable {
             productName = name.isEmpty ? nil : name
             dictionary.removeValue(forKey: Self.productNameKey)
         }
+        let picture = Picture(dictionary.filter { Picture.isPictureKey($0.key) })
+        dictionary = dictionary.filter { !Picture.isPictureKey($0.key) }
         var resolutions: [ScaleResolution] = []
         if let elements = dictionary[Self.resolutionsKey] as? [Any] {
             resolutions = ScaleResolutionCodec.decode(elements)
             dictionary.removeValue(forKey: Self.resolutionsKey)
         }
         self.init(
-            key: key, productName: productName, resolutions: resolutions, otherKeys: PropertyListDictionary(dictionary),
-            isNew: false
+            key: key, productName: productName, picture: picture, resolutions: resolutions,
+            otherKeys: PropertyListDictionary(dictionary), isNew: false
         )
     }
 
@@ -145,6 +161,7 @@ public struct DisplayOverride: Equatable, Sendable {
         if let productName, !productName.isEmpty {
             dictionary[Self.productNameKey] = productName
         }
+        dictionary.merge(picture.dictionary) { _, picture in picture }
         let encoded = try ScaleResolutionCodec.encode(resolutions)
         if !encoded.isEmpty {
             dictionary[Self.resolutionsKey] = encoded
@@ -153,5 +170,78 @@ public struct DisplayOverride: Equatable, Sendable {
             }
         }
         return try PropertyListSerialization.data(fromPropertyList: dictionary, format: .xml, options: 0)
+    }
+}
+
+extension DisplayOverride {
+    /// How macOS draws a display, as an override file's picture keys say. They are kept
+    /// exactly as the file holds them, so a picture Resolute does not recognize, such as
+    /// one another tool chose, is written back unchanged.
+    ///
+    /// - `display-icon`: the display's icon, as the path of an icon file.
+    /// - `display-resolution-preview-icon`: the picture System Settings › Displays shows, as
+    ///   the path of an image, with the desktop drawn into the screen's rectangle:
+    ///   `resolution-preview-x`, `-y`, `-width` and `-height`, in points from the picture's
+    ///   bottom-left corner. The same keys ending in `-large` are for System Settings' larger
+    ///   picture, which Apple draws only of MacBooks, and those ending in `-90`, `-180` or
+    ///   `-270` for a rotated display.
+    /// - `resolution-corner-radius`: how rounded the screen's corners are.
+    public struct Picture: Equatable, Sendable {
+        public static let iconKey = "display-icon"
+        public static let previewKey = "display-resolution-preview-icon"
+        /// The screen's rectangle in the picture: x, y, width and height.
+        public static let previewFrameKeys = [
+            "resolution-preview-x", "resolution-preview-y", "resolution-preview-width", "resolution-preview-height",
+        ]
+        public static let cornerRadiusKey = "resolution-corner-radius"
+
+        /// No picture keys: macOS draws the display as it would without an override.
+        public static let none = Picture([:])
+
+        private var values: PropertyListDictionary
+
+        /// The picture keys in `dictionary`; any other key is left out.
+        public init(_ dictionary: [String: Any]) {
+            values = PropertyListDictionary(dictionary.filter { Self.isPictureKey($0.key) })
+        }
+
+        /// Whether macOS reads `key` for a display's icon or its picture.
+        public static func isPictureKey(_ key: String) -> Bool {
+            key == iconKey || key.hasPrefix(previewKey) || key.hasPrefix("resolution-preview-")
+                || key.hasPrefix(cornerRadiusKey)
+        }
+
+        /// The keys and their values, as the file holds them.
+        public var dictionary: [String: Any] { values.dictionary }
+
+        public var keys: [String] { values.keys }
+
+        public var isEmpty: Bool { dictionary.isEmpty }
+
+        /// `display-icon`; nil when there is none, or when it holds something other than text.
+        public var icon: String? {
+            get { dictionary[Self.iconKey] as? String }
+            set {
+                var dictionary = dictionary
+                if let newValue {
+                    dictionary[Self.iconKey] = newValue
+                } else {
+                    dictionary.removeValue(forKey: Self.iconKey)
+                }
+                values = PropertyListDictionary(dictionary)
+            }
+        }
+
+        /// The picture System Settings › Displays shows (`display-resolution-preview-icon`).
+        public var previewImage: String? { dictionary[Self.previewKey] as? String }
+
+        /// Which picture a preview key belongs to: "" for the main one, "-large", "-90" and
+        /// so on for the others. Nil for any other key.
+        static func variant(of key: String) -> String? {
+            for base in [previewKey] + previewFrameKeys where key.hasPrefix(base) {
+                return String(key.dropFirst(base.count))
+            }
+            return nil
+        }
     }
 }

@@ -1,81 +1,84 @@
 #!/usr/bin/env swift
-// Draws Resolute's app icon and writes it as an .icns file.
+// Writes Resources/AppIcon.icns from the app icon's Figma artwork, Design/AppIcon/default.pdf
+// (Components › App Icon › Default, the master on the App Icon page): every size from 16
+// to 512 points at 1× and 2×, each drawn from the vector artwork at its own pixel size in
+// sRGB, then packed by iconutil.
 //
-//   swift Scripts/make-icon.swift Resources/AppIcon.icns
-import AppKit
+//   swift Scripts/make-icon.swift [artwork.pdf] [output.icns]
+//
+// `make icon` runs it with those two files, which are also the defaults. An .icns has one
+// appearance; the Dark and Tinted icons need an Icon Composer icon.
+import CoreGraphics
+import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
-let output = URL(filePath: CommandLine.arguments.dropFirst().first ?? "Resources/AppIcon.icns")
+let arguments = Array(CommandLine.arguments.dropFirst())
+let artwork = URL(filePath: arguments.count > 0 ? arguments[0] : "Design/AppIcon/default.pdf")
+let output = URL(filePath: arguments.count > 1 ? arguments[1] : "Resources/AppIcon.icns")
+
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data("make-icon: \(message)\n".utf8))
+    exit(1)
+}
+
+guard let document = CGPDFDocument(artwork as CFURL), let page = document.page(at: 1) else {
+    fail("can't read \(artwork.path(percentEncoded: false)) as a PDF.")
+}
+let box = page.getBoxRect(.mediaBox)
+guard box.width > 0, box.width == box.height else {
+    fail("the artwork must be square; its page is \(box.width) × \(box.height).")
+}
+
+/// The artwork drawn into a `pixels` × `pixels` sRGB bitmap.
+func render(pixels: Int) -> CGImage {
+    guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+        let context = CGContext(
+            data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )
+    else { fail("can't make a \(pixels)-pixel bitmap.") }
+    // The artwork's drop shadow is a bitmap inside the PDF; resample it smoothly.
+    context.interpolationQuality = .high
+    let scale = CGFloat(pixels) / box.width
+    context.scaleBy(x: scale, y: scale)
+    context.translateBy(x: -box.minX, y: -box.minY)
+    context.drawPDFPage(page)
+    guard let image = context.makeImage() else { fail("can't draw the \(pixels)-pixel icon.") }
+    return image
+}
+
+func writePNG(_ image: CGImage, to url: URL) {
+    guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
+    else { fail("can't write \(url.path(percentEncoded: false)).") }
+    CGImageDestinationAddImage(destination, image, nil)
+    guard CGImageDestinationFinalize(destination) else { fail("can't write \(url.path(percentEncoded: false)).") }
+}
+
 let iconset = FileManager.default.temporaryDirectory
     .appending(path: "Resolute-\(UUID().uuidString).iconset", directoryHint: .isDirectory)
-try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
-
-func symbol(_ name: String, pointSize: CGFloat, weight: NSFont.Weight, color: NSColor) -> NSImage? {
-    let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
-        .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
-    return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+do {
+    try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
+} catch {
+    fail("can't make \(iconset.path(percentEncoded: false)): \(error.localizedDescription)")
 }
-
-func drawIcon(pixels: Int) -> NSBitmapImageRep {
-    let bitmap = NSBitmapImageRep(
-        bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
-        samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-        bytesPerRow: 0, bitsPerPixel: 0
-    )!
-    bitmap.size = NSSize(width: pixels, height: pixels)
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
-    let unit = CGFloat(pixels) / 1024
-
-    // A rounded square on Apple's 1024-point icon grid, with a soft shadow.
-    let tile = NSRect(x: 100 * unit, y: 100 * unit, width: 824 * unit, height: 824 * unit)
-    let shape = NSBezierPath(roundedRect: tile, xRadius: 185 * unit, yRadius: 185 * unit)
-    NSGraphicsContext.saveGraphicsState()
-    let shadow = NSShadow()
-    shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
-    shadow.shadowBlurRadius = 24 * unit
-    shadow.shadowOffset = NSSize(width: 0, height: -10 * unit)
-    shadow.set()
-    NSColor(srgbRed: 0.10, green: 0.14, blue: 0.40, alpha: 1).setFill()
-    shape.fill()
-    NSGraphicsContext.restoreGraphicsState()
-    NSGradient(colors: [
-        NSColor(srgbRed: 0.18, green: 0.22, blue: 0.62, alpha: 1),
-        NSColor(srgbRed: 0.04, green: 0.56, blue: 0.78, alpha: 1),
-    ])!.draw(in: shape, angle: 60)
-
-    // A white display with "resize" arrows on its screen.
-    if let display = symbol("display", pointSize: 430 * unit, weight: .regular, color: .white) {
-        let size = display.size
-        display.draw(in: NSRect(
-            x: (CGFloat(pixels) - size.width) / 2, y: (CGFloat(pixels) - size.height) / 2 + 6 * unit,
-            width: size.width, height: size.height
-        ))
-    }
-    let arrowColor = NSColor(srgbRed: 0.12, green: 0.30, blue: 0.68, alpha: 1)
-    if let arrows = symbol("arrow.up.left.and.arrow.down.right", pointSize: 170 * unit, weight: .bold, color: arrowColor) {
-        let size = arrows.size
-        arrows.draw(in: NSRect(
-            x: (CGFloat(pixels) - size.width) / 2, y: 560 * unit - size.height / 2,
-            width: size.width, height: size.height
-        ))
-    }
-    NSGraphicsContext.restoreGraphicsState()
-    return bitmap
-}
-
 for points in [16, 32, 128, 256, 512] {
     for scale in [1, 2] {
         let name = scale == 1 ? "icon_\(points)x\(points).png" : "icon_\(points)x\(points)@2x.png"
-        let png = drawIcon(pixels: points * scale).representation(using: .png, properties: [:])!
-        try png.write(to: iconset.appending(path: name))
+        writePNG(render(pixels: points * scale), to: iconset.appending(path: name))
     }
 }
 
 let iconutil = Process()
 iconutil.executableURL = URL(filePath: "/usr/bin/iconutil")
 iconutil.arguments = ["-c", "icns", iconset.path(percentEncoded: false), "-o", output.path(percentEncoded: false)]
-try iconutil.run()
-iconutil.waitUntilExit()
+do {
+    try iconutil.run()
+    iconutil.waitUntilExit()
+} catch {
+    try? FileManager.default.removeItem(at: iconset)
+    fail("can't run iconutil: \(error.localizedDescription)")
+}
 try? FileManager.default.removeItem(at: iconset)
 guard iconutil.terminationStatus == 0 else { exit(iconutil.terminationStatus) }
 print("Wrote \(output.path(percentEncoded: false))")

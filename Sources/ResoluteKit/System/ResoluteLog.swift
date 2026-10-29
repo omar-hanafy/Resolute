@@ -8,4 +8,8 @@ public enum ResoluteLog {
     public static let modes = Logger(subsystem: subsystem, category: "modes")
     /// Override files written and removed, and backups deleted, by the app or `resolute`.
     public static let overrides = Logger(subsystem: subsystem, category: "overrides")
+    /// Changes added to History, and history files that could not be read or written.
+    public static let history = Logger(subsystem: subsystem, category: "history")
+    /// Presets files that could not be read or written.
+    public static let presets = Logger(subsystem: subsystem, category: "presets")
 }

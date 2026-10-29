@@ -9,13 +9,15 @@ struct ResoluteCommand: AsyncParsableCommand {
         abstract: "List and switch display modes, including the ones macOS hides.",
         version: ResoluteVersion.string,
         subcommands: [
-            DisplaysCommand.self, ModesCommand.self, SetCommand.self, MirrorCommand.self, OverridesCommand.self, DoctorCommand.self,
+            DisplaysCommand.self, ModesCommand.self, SetCommand.self, MirrorCommand.self, OverridesCommand.self,
+            PresetCommand.self, ScalingCommand.self, HistoryCommand.self, DoctorCommand.self,
         ],
         defaultSubcommand: DisplaysCommand.self
     )
 
-    static let commands = ["displays", "modes", "set", "mirror", "overrides", "doctor"]
+    static let commands = ["displays", "modes", "set", "mirror", "overrides", "preset", "scaling", "history", "doctor"]
     static let overridesCommands = ["list", "show", "add", "remove", "reset", "backups", "restore", "prune"]
+    static let scalingCommands = ["plan", "on", "off", "status"]
 
     static func main() async {
         let result = await execute(Array(CommandLine.arguments.dropFirst()), in: .live)
@@ -92,6 +94,25 @@ struct ResoluteCommand: AsyncParsableCommand {
             return problem + " The overrides commands are "
                 + overridesCommands.dropLast().joined(separator: ", ") + " and " + (overridesCommands.last ?? "") + "."
         }
+        if first == "preset" {
+            // "resolute preset aply …" would reach `list`, the default, as extra arguments.
+            guard arguments.count > 1 else { return nil }
+            return PresetCommand.unknownCommandMessage(for: arguments[1])
+        }
+        if first == "scaling" {
+            // "resolute scaling onn" would reach `status`, the default, as an extra argument.
+            guard arguments.count > 1, !arguments[1].hasPrefix("-"), !scalingCommands.contains(arguments[1]) else { return nil }
+            let word = arguments[1]
+            let problem = "“\(word)” is not a scaling command."
+            if word == "help" {
+                return problem + " Did you mean “resolute help scaling”?"
+            }
+            if let command = scalingCommands.first(where: { isTypo(word.lowercased(), of: $0) }) {
+                return problem + " Did you mean “resolute scaling \(command)”?"
+            }
+            return problem + " The scaling commands are "
+                + scalingCommands.dropLast().joined(separator: ", ") + " and " + (scalingCommands.last ?? "") + "."
+        }
         guard !commands.contains(first) else { return nil }
         let problem = "“\(first)” is not a resolute command."
         if first.lowercased() == "version" {
@@ -100,6 +121,9 @@ struct ResoluteCommand: AsyncParsableCommand {
         // Checked before typos: "reset" is one letter from "set", which changes the screen.
         if overridesCommands.contains(first.lowercased()) {
             return problem + " Did you mean “resolute overrides \(first.lowercased())”?"
+        }
+        if PresetCommand.commandNames.contains(first.lowercased()) {
+            return problem + " Did you mean “resolute preset \(first.lowercased())”?"
         }
         if let command = commands.first(where: { isTypo(first.lowercased(), of: $0) }) {
             return problem + " Did you mean “resolute \(command)”?"
@@ -151,17 +175,31 @@ struct CommandContext: Sendable {
     /// Hidden modes need a person who can see and confirm the result. Tests provide
     /// their own confirmation closure; the live context checks its actual terminal.
     var canConfirmHiddenMode = true
+    /// Presets, history and the app's request channel; tests use a temporary folder.
+    var support = SupportLocations.standard
+    /// The running app, which asks the person at the display to keep a hidden mode; `set`
+    /// asks it before the terminal. `live` looks for it at `support.agentSocket`. Nil never
+    /// looks, so tests that answer with `confirmHiddenMode` can't reach a real app.
+    var app: AgentChannelClient?
+    /// Who runs the command, for the app's dialog and History to name. Tests name nobody
+    /// unless they say otherwise, so their results don't depend on where they run.
+    var requester: @Sendable () -> Requester = { Requester() }
 
     static var live: CommandContext {
-        CommandContext(
+        var context = CommandContext(
             service: SystemDisplayService(),
             write: { print($0) },
             writeError: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) },
-            confirmHiddenMode: { SetCommand.askToKeep() },
+            // The prompt goes where the person reads it. Standard output piped elsewhere,
+            // as with --json, carries only the result.
+            confirmHiddenMode: { SetCommand.askToKeep(output: isatty(STDOUT_FILENO) != 0 ? STDOUT_FILENO : STDERR_FILENO) },
             isRoot: geteuid() == 0,
             interrupts: .process,
             canConfirmHiddenMode: isatty(STDIN_FILENO) != 0
         )
+        context.app = AgentChannelClient(socket: context.support.agentSocket)
+        context.requester = { Requester.current() }
+        return context
     }
 }
 

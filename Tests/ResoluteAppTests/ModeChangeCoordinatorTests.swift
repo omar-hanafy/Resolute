@@ -125,6 +125,23 @@ final class TestClock {
     var now = ContinuousClock.now
 }
 
+/// What ran, in order, and how each wait for a display ended.
+@MainActor
+final class CoordinatorLog {
+    var ran: [String] = []
+    var endings: [String] = []
+
+    func note(_ ending: ModeChangeCoordinator.WaitEnding, of restore: ModeSwitcher.PendingRestore) {
+        let how = switch ending {
+        case .displayIsBack: "back"
+        case .replaced: "replaced"
+        case .stopped: "stopped"
+        case .gaveUp(let reason): "gave up: \(reason.localizedDescription)"
+        }
+        endings.append("\(restore.displayName) \(how)")
+    }
+}
+
 @MainActor
 @Suite struct ModeChangeCoordinatorTests {
     typealias Change = ReconnectingDisplays.Change
@@ -393,6 +410,54 @@ final class TestClock {
         #expect(displays.changes.last == Change(displayID: 2, modeID: 3, scope: .session))
     }
 
+    /// A listed mode chosen for another monitor that took the ID of the one still away
+    /// leaves that one's revert waiting, so it is still put back when it returns.
+    @Test func keepsTheRevertOfADisplayAwayWhenAnotherWithItsIDIsSwitched() {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        tryModeThatMakesTheMonitorGoAway()
+        displays.replaceMonitor(serialNumber: 1234)
+        displays.comeBack(2, showing: 3)
+        coordinator.displaysDidChange()
+        coordinator.apply(modeID: 1, to: 2, needsConfirmation: false)
+        #expect(displays.changes.last == Change(displayID: 2, modeID: 1, scope: .permanent))
+        #expect(coordinator.pendingRestores == [pending])
+        #expect(log.endings.isEmpty)
+    }
+
+    /// The same for a preset that switches the other monitor.
+    @Test func keepsTheRevertOfADisplayAwayWhenAPresetSwitchesAnotherWithItsID() throws {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        tryModeThatMakesTheMonitorGoAway()
+        displays.replaceMonitor(serialNumber: 1234)
+        displays.comeBack(2, showing: 3)
+        let replacement = try #require(displays.displays().first { $0.id == 2 })
+        let preset = Preset(name: "Desk", displays: [DisplaySetting(display: replacement, mode: ReconnectingDisplays.mode(1, flags: 0x7))])
+        _ = coordinator.applyPreset(preset)
+        #expect(displays.changes.last?.modeID == 1)
+        #expect(coordinator.pendingRestores == [pending])
+        #expect(log.endings.isEmpty)
+    }
+
+    /// The monitor that took the ID of one still away goes dark during a trial of its own:
+    /// one ID can't wait for both, so the first revert is given up, as the wait's end says,
+    /// and the new one waits.
+    @Test func givesUpTheRevertOfADisplayAwayWhenAnotherWithItsIDGoesDarkToo() {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        tryModeThatMakesTheMonitorGoAway()
+        displays.replaceMonitor(serialNumber: 1234)
+        displays.comeBack(2, showing: 3)
+        coordinator.displaysDidChange()
+        #expect(coordinator.pendingRestores == [pending])
+
+        tryModeThatMakesTheMonitorGoAway()
+
+        #expect(log.endings == ["DELL P2419H gave up: " + ResoluteError.displayDidNotReturn(display: "DELL P2419H").localizedDescription])
+        #expect(coordinator.pendingRestores.map(\.modeID) == [3])
+    }
+
     /// A mode chosen while a countdown is up is ignored, with the revert waiting for its
     /// display: either could open an alert or a second countdown over the first, holding
     /// up its revert until closed.
@@ -435,5 +500,118 @@ final class TestClock {
         #expect(seenDuringCountdown?.waiting == 1)
         #expect(reports.errors == [.revertFailed(display: "DELL P2419H")])
         #expect(coordinator.pendingRestores.isEmpty)
+    }
+
+    // MARK: - Work that waits for a switch
+
+    /// Work asked for while a countdown is up runs once the switch is over, at the run
+    /// loop's next turn, in the order it came; with no switch under way it runs at once.
+    @Test func runsWorkThatWaitedForTheSwitchOnceItIsOver() {
+        let log = CoordinatorLog()
+        let coordinator = coordinator
+        coordinator.afterSwitch { log.ran.append("now") }
+        countdown.answers.append {
+            coordinator.afterSwitch { log.ran.append("first") }
+            coordinator.afterSwitch { log.ran.append("second") }
+            return .revert
+        }
+        coordinator.apply(modeID: 91, to: 1, needsConfirmation: true)
+        #expect(log.ran == ["now"])
+        // Asked for before the waiting work ran: it waits its turn.
+        coordinator.afterSwitch { log.ran.append("third") }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        #expect(log.ran == ["now", "first", "second", "third"])
+    }
+
+    /// A countdown that starts before the waiting work runs holds it again, even as its
+    /// question turns the run loop, as a modal alert does.
+    @Test func holdsWaitingWorkThroughACountdownThatStartsBeforeItRuns() {
+        let log = CoordinatorLog()
+        let coordinator = coordinator
+        countdown.answers.append {
+            coordinator.afterSwitch { log.ran.append("waited") }
+            return .revert
+        }
+        countdown.answers.append {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+            log.ran.append("second countdown")
+            return .revert
+        }
+        coordinator.apply(modeID: 91, to: 1, needsConfirmation: true)
+        coordinator.apply(modeID: 90, to: 2, needsConfirmation: true)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        #expect(log.ran == ["second countdown", "waited"])
+    }
+
+    // MARK: - How waits end
+
+    @Test func saysTheWaitEndedWhenTheDisplayIsBack() {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        tryModeThatMakesTheMonitorGoAway()
+        coordinator.displaysDidChange()
+        #expect(log.endings.isEmpty)
+        displays.comeBack(2)
+        coordinator.displaysDidChange()
+        #expect(log.endings == ["DELL P2419H back"])
+    }
+
+    @Test func saysTheWaitEndedWhenItIsGivenUp() {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        tryModeThatMakesTheMonitorGoAway()
+        clock.now += .seconds(120)
+        coordinator.expireRestores()
+        #expect(log.endings == ["DELL P2419H gave up: \(ResoluteError.displayDidNotReturn(display: "DELL P2419H").localizedDescription)"])
+    }
+
+    @Test func saysTheWaitEndedWhenThePersonStopsWaiting() {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        tryModeThatMakesTheMonitorGoAway()
+        coordinator.stopWaiting(for: 2)
+        #expect(log.endings == ["DELL P2419H stopped"])
+        #expect(coordinator.pendingRestores.isEmpty)
+    }
+
+    /// The display is back but refuses its previous mode, and takes the one chosen next.
+    @Test func saysTheWaitEndedWhenANewSwitchReplacesIt() {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        tryModeThatMakesTheMonitorGoAway()
+        displays.refused = [1]
+        displays.comeBack(2)
+        coordinator.apply(modeID: 3, to: 2, needsConfirmation: false)
+        #expect(log.endings == ["DELL P2419H replaced"])
+        #expect(coordinator.pendingRestores.isEmpty)
+    }
+
+    @Test func saysTheWaitEndedWhenAPresetReplacesIt() throws {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        tryModeThatMakesTheMonitorGoAway()
+        displays.refused = [1]
+        displays.comeBack(2)
+        let monitor = try #require(displays.displays().first { $0.id == 2 })
+        let preset = Preset(name: "Desk", displays: [DisplaySetting(display: monitor, mode: ReconnectingDisplays.mode(3))])
+        _ = coordinator.applyPreset(preset)
+        #expect(log.endings == ["DELL P2419H replaced"])
+        #expect(coordinator.pendingRestores.isEmpty)
+    }
+
+    /// A second trial of the same display that goes dark too is undone by the same revert:
+    /// its wait goes on.
+    @Test func saysNothingWhenASecondTrialJoinsTheWait() {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        tryModeThatMakesTheMonitorGoAway()
+        displays.refused = [1]
+        displays.comeBack(2)
+        tryModeThatMakesTheMonitorGoAway(modeID: 3)
+        #expect(log.endings.isEmpty)
+        displays.refused = []
+        displays.comeBack(2)
+        coordinator.displaysDidChange()
+        #expect(log.endings == ["DELL P2419H back"])
     }
 }

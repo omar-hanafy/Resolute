@@ -6,9 +6,9 @@ public enum MenuAction: Hashable, Sendable {
     case applyMode(displayID: CGDirectDisplayID, modeID: Int32, needsConfirmation: Bool)
     case setMirroring(Bool)
     case openCustomResolutions(displayID: CGDirectDisplayID?)
-    case toggleLowResolutionModes
-    case toggleLaunchAtLogin
-    case showAbout
+    /// Open Resolute: the window, on the main display's page.
+    case openWindow
+    case openSettings
     case quit
 }
 
@@ -66,22 +66,19 @@ public enum MenuNode: Hashable, Sendable {
 /// Preferences and state that shape the menu.
 public struct MenuSettings: Hashable, Sendable {
     public var showLowResolutionModes: Bool
-    public var launchAtLogin: LaunchAtLoginState
     /// True while ⌥ is held: show hidden modes, mode IDs and pixel sizes.
     public var showsDetails: Bool
 
-    public init(
-        showLowResolutionModes: Bool = true,
-        launchAtLogin: LaunchAtLoginState = .disabled,
-        showsDetails: Bool = false
-    ) {
+    public init(showLowResolutionModes: Bool = true, showsDetails: Bool = false) {
         self.showLowResolutionModes = showLowResolutionModes
-        self.launchAtLogin = launchAtLogin
         self.showsDetails = showsDetails
     }
 }
 
-/// Builds the status-bar menu from display snapshots.
+/// Builds the classic menu, which a right-click on the menu bar icon opens (Figma: Menu bar
+/// panel › classic menu 25:1842): each display's sizes at hand, More Resolutions and its
+/// refresh rate, then Mirror Displays, Open Resolute, Settings… and Quit Resolute. Its items
+/// have no images: macOS 27 hides them in menus by default.
 public enum MenuModel {
     public static func build(displays: [Display], settings: MenuSettings) -> [MenuNode] {
         var nodes: [MenuNode] = []
@@ -89,45 +86,20 @@ public enum MenuModel {
             nodes.append(.item(MenuItem(title: "No Displays Found", isEnabled: false)))
         }
         let names = Dictionary(displays.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
-        for display in ordered(displays) {
+        for (index, display) in ordered(displays).enumerated() {
+            if index > 0 { nodes.append(.separator) }
             nodes.append(.header(headerTitle(for: display, names: names)))
             nodes.append(contentsOf: displayItems(for: display, settings: settings))
         }
         nodes.append(.separator)
         if displays.count > 1 {
             let mirroring = displays.contains(where: \.isInMirrorSet)
-            nodes.append(.item(MenuItem(
-                title: "Mirror Displays", symbolName: "rectangle.on.rectangle",
-                isChecked: mirroring, action: .setMirroring(!mirroring)
-            )))
+            nodes.append(.item(MenuItem(title: "Mirror Displays", isChecked: mirroring, action: .setMirroring(!mirroring))))
         }
-        nodes.append(.item(MenuItem(
-            title: "Custom Resolutions…", symbolName: "slider.horizontal.3",
-            action: .openCustomResolutions(displayID: nil)
-        )))
-        nodes.append(.separator)
-        nodes.append(.item(MenuItem(
-            title: "Show Low-Resolution Modes",
-            isChecked: settings.showLowResolutionModes, action: .toggleLowResolutionModes
-        )))
-        nodes.append(.item(launchAtLoginItem(settings.launchAtLogin)))
-        nodes.append(.separator)
-        nodes.append(.item(MenuItem(title: "About Resolute", action: .showAbout)))
+        nodes.append(.item(MenuItem(title: "Open Resolute", action: .openWindow)))
+        nodes.append(.item(MenuItem(title: "Settings…", action: .openSettings, keyEquivalent: ",")))
         nodes.append(.item(MenuItem(title: "Quit Resolute", action: .quit, keyEquivalent: "q")))
         return nodes
-    }
-
-    public static func launchAtLoginItem(_ state: LaunchAtLoginState) -> MenuItem {
-        switch state {
-        case .enabled:
-            MenuItem(title: "Launch at Login", isChecked: true, action: .toggleLaunchAtLogin)
-        case .disabled:
-            MenuItem(title: "Launch at Login", action: .toggleLaunchAtLogin)
-        case .requiresApproval:
-            MenuItem(title: "Launch at Login", subtitle: "Needs approval in System Settings", action: .toggleLaunchAtLogin)
-        case .unavailable:
-            MenuItem(title: "Launch at Login", subtitle: "Available when Resolute runs from its app bundle", isEnabled: false)
-        }
     }
 
     /// A plain-text rendering, for `Resolute --dump-menu` and tests.
@@ -149,28 +121,25 @@ public enum MenuModel {
         return "\(display.name) — mirroring \(sourceName)"
     }
 
+    /// A display's sizes at hand, then every size under More Resolutions, then its refresh
+    /// rate.
     static func displayItems(for display: Display, settings: MenuSettings) -> [MenuNode] {
-        let current = display.currentMode
-        var nodes: [MenuNode] = [
-            .item(MenuItem(
-                title: current.map { $0.sizeText + idSuffix($0, settings) } ?? "Choose a Resolution",
-                subtitle: current.flatMap { resolutionSubtitle(for: $0, on: display) },
-                symbolName: "display",
-                submenu: resolutionSubmenu(for: display, settings: settings)
-            )),
-        ]
-        guard let current, current.refreshRate > 0 else { return nodes }
+        var nodes = quickSizes(for: display, settings: settings)
+        nodes.append(.item(MenuItem(
+            title: nodes.isEmpty ? "Choose a Resolution" : "More Resolutions",
+            submenu: resolutionSubmenu(for: display, settings: settings)
+        )))
+        guard let current = display.currentMode, current.refreshRate > 0 else { return nodes }
         let options = ModeCatalog.refreshOptions(for: display, includeHidden: settings.showsDetails)
             .filter { $0.refreshRate > 0 }
-        let title = RefreshRate.format(current.refreshRate)
+        let title = "Refresh Rate: " + RefreshRate.format(current.refreshRate)
         if options.count > 1 {
             nodes.append(.item(MenuItem(
                 title: title,
-                symbolName: "arrow.triangle.2.circlepath",
                 submenu: options.map { option in
                     MenuNode.item(MenuItem(
                         title: RefreshRate.format(option.refreshRate) + idSuffix(option.mode, settings),
-                        symbolName: option.mode.origin == .hidden ? "exclamationmark.triangle" : nil,
+                        badge: option.mode.origin == .hidden ? "Hidden" : nil,
                         isChecked: option.isCurrent,
                         action: .applyMode(
                             displayID: display.id, modeID: option.mode.modeID,
@@ -180,15 +149,28 @@ public enum MenuModel {
                 }
             )))
         } else {
-            nodes.append(.item(MenuItem(title: title, symbolName: "arrow.triangle.2.circlepath", isEnabled: false)))
+            nodes.append(.item(MenuItem(title: title, isEnabled: false)))
         }
         return nodes
     }
 
-    static func resolutionSubtitle(for mode: DisplayMode, on display: Display) -> String? {
-        if mode.isHiDPI { return "HiDPI · \(mode.pixelSizeText) pixels" }
-        // Worth saying only on displays that also offer HiDPI modes.
-        return display.modes.contains(where: \.isHiDPI) ? "Low resolution (1×)" : nil
+    /// The sizes the menu offers without a submenu, larger first: a Retina display's
+    /// Larger Text ↔ More Space stops, as the panel offers them; another display's default
+    /// and native sizes. The size in use is always one of them.
+    static func quickSizes(for display: Display, settings: MenuSettings) -> [MenuNode] {
+        let currentKey = ModeCatalog.currentKey(for: display)
+        let listed = ModeCatalog.groups(display.modes.filter { $0.origin == .system || $0.modeID == display.currentModeID })
+        let stops = SpaceStops(display: display).map { Set($0.stops.map(\.key)) }
+        return listed.filter { group in
+            group.key == currentKey || (stops.map { $0.contains(group.key) } ?? (group.isDefault || group.isNative))
+        }.map { group in
+            let mode = ModeCatalog.preferredMode(in: group, current: display.currentMode)
+            return .item(MenuItem(
+                title: group.sizeText + (group.badge.map { " — \($0)" } ?? "") + idSuffix(mode, settings),
+                isChecked: group.key == currentKey,
+                action: .applyMode(displayID: display.id, modeID: mode.modeID, needsConfirmation: mode.origin == .hidden)
+            ))
+        }
     }
 
     static func idSuffix(_ mode: DisplayMode, _ settings: MenuSettings) -> String {
@@ -210,8 +192,7 @@ public enum MenuModel {
                 nodes.append(.item(MenuItem(
                     title: group.sizeText + idSuffix(mode, settings),
                     subtitle: settings.showsDetails && group.isHiDPI ? "\(group.pixelSizeText) pixels" : nil,
-                    badge: group.badge,
-                    symbolName: group.isHidden ? "exclamationmark.triangle" : nil,
+                    badge: group.isHidden ? "Hidden" : group.badge,
                     isChecked: group.key == currentKey,
                     action: .applyMode(displayID: display.id, modeID: mode.modeID, needsConfirmation: mode.origin == .hidden)
                 )))

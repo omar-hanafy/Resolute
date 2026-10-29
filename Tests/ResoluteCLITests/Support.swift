@@ -17,6 +17,7 @@ final class FakeDisplays: DisplayControlling, @unchecked Sendable {
     private var list: [Display]
     private var recorded: [Change] = []
     private var mirroring: [Bool] = []
+    private var mirroringError: ResoluteError?
     private let ignoredModeIDs: Set<Int32>
     private let hidesHiddenCurrentMode: Bool
 
@@ -31,6 +32,12 @@ final class FakeDisplays: DisplayControlling, @unchecked Sendable {
 
     var changes: [Change] { lock.withLock { recorded } }
     var mirroringCalls: [Bool] { lock.withLock { mirroring } }
+
+    /// An error every mirroring change throws, while set.
+    var mirroringFailure: ResoluteError? {
+        get { lock.withLock { mirroringError } }
+        set { lock.withLock { mirroringError = newValue } }
+    }
 
     func displays() -> [Display] { lock.withLock { list } }
 
@@ -53,7 +60,8 @@ final class FakeDisplays: DisplayControlling, @unchecked Sendable {
     }
 
     func setMirroring(_ enabled: Bool) throws {
-        lock.withLock {
+        try lock.withLock {
+            if let mirroringError { throw mirroringError }
             mirroring.append(enabled)
             for index in list.indices { list[index].isInMirrorSet = enabled }
         }
@@ -105,14 +113,22 @@ final class Transcript: @unchecked Sendable {
     var output: String { lock.withLock { outputLines.joined(separator: "\n") } }
     var errors: String { lock.withLock { errorLines.joined(separator: "\n") } }
 
+    /// A fresh support folder for each transcript, so the commands' history and presets
+    /// never reach the real one in the person's home.
+    let support = SupportLocations(
+        root: FileManager.default.temporaryDirectory.appending(path: "Resolute CLI support \(UUID().uuidString)", directoryHint: .isDirectory)
+    )
+
     func context(service: any DisplayControlling, isRoot: Bool, decision: ModeSwitcher.Decision) -> CommandContext {
-        CommandContext(
+        var context = CommandContext(
             service: service,
             write: { [self] line in lock.withLock { outputLines.append(line) } },
             writeError: { [self] line in lock.withLock { errorLines.append(line) } },
             confirmHiddenMode: { decision },
             isRoot: isRoot
         )
+        context.support = support
+        return context
     }
 }
 

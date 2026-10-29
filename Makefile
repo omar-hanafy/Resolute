@@ -1,4 +1,4 @@
-.PHONY: build test lint live-test app release install uninstall icon clean
+.PHONY: build test lint live-test app release install uninstall icon assets gallery clean
 
 build:
 	swift build
@@ -27,7 +27,15 @@ uninstall:
 	Scripts/uninstall.sh
 
 icon:
-	swift Scripts/make-icon.swift Resources/AppIcon.icns
+	swift Scripts/make-icon.swift Design/AppIcon/default.pdf Resources/AppIcon.icns
+
+# Re-embeds the artwork in Design/ into ResoluteDesign after a Figma export.
+assets:
+	swift Scripts/embed-assets.swift
+
+# Renders every design-system and app scene, in Light and Dark, for comparing with Figma.
+gallery:
+	Scripts/render-gallery.sh .build/gallery
 
 clean:
 	rm -rf .build dist

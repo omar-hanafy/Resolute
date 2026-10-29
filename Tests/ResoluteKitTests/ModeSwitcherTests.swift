@@ -60,6 +60,17 @@ import Testing
         #expect(service.currentModeID(of: 2) == 1)
     }
 
+    /// A trial no switch of its own will finish, such as a killed command's: the revert set
+    /// up for it puts the previous mode back, else the default one, never the mode on trial.
+    @Test func revertsATrialItDidNotStart() throws {
+        let service = FakeDisplayService(display: TestData.fullHD(currentModeID: 90), ignoring: [91])
+        let display = try #require(service.displays().first)
+        let restore = try #require(ModeSwitcher.restore(undoing: 90, on: display, backTo: 91))
+        #expect(try ModeSwitcher(service: service).finish(restore) == .restored(to: 1))
+        #expect(service.calls == [Call(modeID: 91, scope: .session), Call(modeID: 1, scope: .session)])
+        #expect(ModeSwitcher.restore(undoing: 90, on: display, backTo: nil)?.modeID == 1)
+    }
+
     @Test func retainsRecoveryWhenHiddenRestoreAndFallbackBothFail() throws {
         let service = FakeDisplayService(display: TestData.fullHD(currentModeID: 91), refusing: [1], ignoring: [91])
         let outcome = try ModeSwitcher(service: service).apply(modeID: 90, to: 2, trial: true) { .revert }

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Presets: a mode for every display, and mirroring, applied from the panel, a shortcut or `resolute preset` (`list`, `show`, `save`, `apply`, `delete`, `rename`, all with `--json`). Presets use listed modes only.
+- History: every switch from the app and the command line, kept 7 days with who asked for it, with Undo in the app and `resolute history` (`--source`, `--limit`, `--json`).
+- Sharp Scaling: Retina-style sizes for standard 1080p and 1440p monitors, written to the display's override file with a backup; `resolute scaling plan`, `on`, `off` and `status`.
+- `resolute set --allow-hidden` asks the running app to show its Keep/Revert dialog on the display being tried, naming the agent or terminal that asked. `set --json` reports how a trial ended.
+- Display pictures and names: the override file can carry the picture System Settings shows for a display.
+
+### Changed
+
+- A kept hidden mode lasts until logout, from the app and the command line alike.
+
 ## 0.3.0 — 2026-09-25
 
 ### Added

@@ -27,6 +27,7 @@ final class FakeLoginItem: LoginItemControlling {
     /// These used to start the menu-bar app instead of saying what went wrong.
     @Test(arguments: [
         ["--details"], ["--verison"], ["--dump-menus"], ["--version", "--bogus"], ["--details", "--version"],
+        ["--only", "ds."], ["--appearance", "dark"],
     ])
     func refusesWhatItDoesNotKnow(_ arguments: [String]) {
         #expect(Diagnostics.run(["Resolute"] + arguments, loginItem: FakeLoginItem(.enabled)) == 64)
@@ -41,7 +42,8 @@ final class FakeLoginItem: LoginItemControlling {
     @Test(arguments: [
         ["--version"], ["--dump-menu", "--details"], ["--details", "--dump-menu-model"],
         ["--render-editor", "editor.png"], ["-NSDocumentRevisionsDebugMode", "YES", "--dump-menu"],
-        ["--unregister-login-item"],
+        ["--unregister-login-item"], ["--render-gallery", "out"], ["--list-gallery"],
+        ["--render-gallery", "out", "--only", "ds.,panel.", "--appearance", "dark"],
     ])
     func acceptsWhatItKnows(_ arguments: [String]) {
         #expect(!Diagnostics.isMisused(["Resolute"] + arguments))

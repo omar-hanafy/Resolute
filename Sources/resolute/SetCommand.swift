@@ -39,12 +39,19 @@ struct SetCommand: ParsableCommand, ContextCommand {
 
     @Flag(help: ArgumentHelp(
         "Allow hidden modes that macOS does not list.",
-        discussion: "A hidden mode requires an interactive terminal. You have 15 seconds to type y to keep it; otherwise the previous mode comes back."
+        discussion: """
+            A person must keep a hidden mode before its trial ends, or the previous mode comes back. When the \
+            Resolute app is running, it asks on the display; otherwise type y in an interactive terminal within \
+            15 seconds. A kept hidden mode lasts until you log out.
+            """
     ))
     var allowHidden = false
 
     @Flag(help: "Show what would change without changing it.")
     var dryRun = false
+
+    @Flag(help: "Print JSON.")
+    var json = false
 
     func validate() throws {
         if let refresh, !(ModeQuery.decimal(refresh).map(ModeQuery.isPlausible(refreshRate:)) ?? false) {
@@ -108,69 +115,123 @@ struct SetCommand: ParsableCommand, ContextCommand {
 
         let mode = try query.resolve(on: display)
         guard mode.modeID != display.currentModeID else {
-            context.write("\(display.name) is already at \(Output.describe(mode)).")
+            var summary = Summary(display: display, mode: mode)
+            summary.result = .applied
+            try say(summary, or: "\(display.name) is already at \(Output.describe(mode)).", in: context)
             return
         }
         guard !dryRun else {
-            context.write("Would switch \(display.name) to \(Output.describe(mode)).")
+            try say(Summary(display: display, mode: mode), or: "Would switch \(display.name) to \(Output.describe(mode)).", in: context)
             return
         }
-        guard mode.origin != .hidden || context.canConfirmHiddenMode else {
-            throw ResoluteError.usage("A hidden mode requires an interactive terminal for its Keep/Revert confirmation. No display settings changed.")
-        }
-        // Hidden modes are tried for the session and kept only when confirmed; --session
-        // only limits how long a confirmed mode lasts.
+        // A person keeps a hidden mode: at the display when the app is there to ask, else in
+        // this terminal. With nobody to ask, nothing changes.
+        let asker = mode.origin == .hidden ? try Self.asker(in: context) : nil
+        // Hidden modes are tried for the session, and a person keeps one until logout at
+        // most; --session only limits how long a listed mode lasts.
         let trial = session || mode.origin == .hidden
         let switcher = ModeSwitcher(service: service)
-        // Until the trial is over, Ctrl-C answers it rather than leaving the mode in place.
-        try context.interrupts.catchingControlC {
-            let outcome = try switcher.apply(modeID: mode.modeID, to: display.id, trial: trial) {
-                guard mode.origin == .hidden else { return .keepForSession }
-                let decision = context.confirmHiddenMode()
-                return session && decision == .keep ? .keepForSession : decision
+        // History lists the change once it has ended, however it ended.
+        let history = context.history
+        var isRecorded = false
+        do {
+            // Until the trial is over, Ctrl-C answers it rather than leaving the mode in place.
+            try context.interrupts.catchingControlC {
+                var request: ConfirmHiddenModeRequest?
+                if case .app(_, let trialSeconds) = asker {
+                    let asked = ConfirmHiddenModeRequest(
+                        display: display, trying: mode, previous: display.currentMode, trialSeconds: trialSeconds,
+                        requester: context.requester()
+                    )
+                    context.writeError("Trying \(asked.mode) on \(display.name) (hidden mode).")
+                    request = asked
+                }
+                var answer: Answer?
+                let outcome = try switcher.apply(modeID: mode.modeID, to: display.id, trial: trial) {
+                    guard let asker else { return .keepForSession }
+                    let given = Self.ask(asker, about: request, in: context)
+                    answer = given
+                    return given.decision
+                }
+                isRecorded = history.record(
+                    outcome, switching: display, to: mode, revertReason: answer?.revertReason ?? .unspecified
+                ) != nil
+                try report(outcome, answer: answer, of: mode, on: display, with: switcher, in: context) {
+                    isRecorded = history.recordSwitch(of: display, to: mode, outcome: .reverted(.displayWentDark)) != nil
+                }
             }
-            try report(outcome, of: mode, on: display, with: switcher, in: context)
+        } catch {
+            if !isRecorded {
+                history.record(error, switching: display, to: mode)
+            }
+            throw error
         }
     }
 
-    /// Says how the switch ended, waiting first for a display that went away mid-trial.
+    /// Prints `summary` with --json, else `text`.
+    private func say(_ summary: Summary, or text: String, in context: CommandContext) throws {
+        context.write(json ? try Output.json(summary) : text)
+    }
+
+    /// Says how the switch ended, waiting first for a display that went away mid-trial;
+    /// `restored` runs once such a display is back in its previous mode.
     private func report(
-        _ outcome: ModeSwitcher.Outcome, of mode: DisplayMode, on display: Display, with switcher: ModeSwitcher,
-        in context: CommandContext
+        _ outcome: ModeSwitcher.Outcome, answer: Answer?, of mode: DisplayMode, on display: Display, with switcher: ModeSwitcher,
+        in context: CommandContext, restored: () -> Void
     ) throws {
         let service = context.service
+        var summary = Summary(display: display, mode: mode)
+        // The app's reasons say what happened at the display; the terminal's are the
+        // person's own doing.
+        let because = answer.flatMap { $0.isToldInText ? $0.reason : nil }.map { " (\($0))" } ?? ""
         switch outcome {
         case .alreadyCurrent:
-            context.write("\(display.name) is already at \(Output.describe(mode)).")
+            summary.result = .applied
+            try say(summary, or: "\(display.name) is already at \(Output.describe(mode)).", in: context)
         case .applied, .kept, .keptForSession:
+            summary.result = answer?.keptBy == nil ? .applied : .kept
+            summary.keptBy = answer?.keptBy
+            summary.until = outcome == .keptForSession ? "logout" : nil
             // The full snapshot, since CoreGraphics may not name a hidden mode in use.
             guard switcher.currentModeID(of: display.id) == mode.modeID else {
                 let isGone = !service.displays().contains { $0.id == display.id }
                 context.writeError(isGone
                     ? "warning: \(display.name) went away, so its new mode could not be checked."
                     : "warning: macOS accepted the change but reports a different mode now.")
+                if json { context.write(try Output.json(summary)) }
                 return
             }
             let until = outcome == .keptForSession ? " (until you log out)" : ""
-            context.write("\(display.name): \(Output.describe(mode))\(until)")
+            try say(summary, or: "\(display.name): \(Output.describe(mode))\(until)", in: context)
         case .reverted(let modeID):
             let restored = display.modes.first { $0.modeID == modeID }
-            context.write("Kept the previous mode: \(restored.map(Output.describe) ?? "mode \(modeID)").")
+            summary.revert(answer, restored: restored)
+            try say(summary, or: "Kept the previous mode: \(restored.map(Output.describe) ?? "mode \(modeID)")\(because).", in: context)
         case .leftAlone(let current):
             let shown = display.modes.first { $0.modeID == current }
-            context.write("\(display.name) was showing \(shown.map(Output.describe) ?? "mode \(current)"), when you answered, so it was left as it is.")
+            summary.revert(answer, restored: shown)
+            let text = "\(display.name) was showing \(shown.map(Output.describe) ?? "mode \(current)"), when you answered, so it was left as it is."
+            try say(summary, or: text, in: context)
         case .restorePending(let pending):
-            try Self.finishRestore(pending, with: switcher, on: display, in: context)
+            let back = try Self.finishRestore(pending, with: switcher, on: display, in: context, json: json)
+            restored()
+            summary.revert(answer, restored: back)
+            if json { context.write(try Output.json(summary)) }
         }
     }
 
     /// Waits for a display that went away during a trial to come back, undoes the trial
-    /// and says how the display came back. A command gets no display notifications, so it
-    /// looks every `restorePollInterval` until `restoreTimeout`, also after a failed try:
-    /// a display that has only just come back may not take a mode yet.
+    /// and says how the display came back, returning the mode it is back in. A command gets
+    /// no display notifications, so it looks every `restorePollInterval` until
+    /// `restoreTimeout`, also after a failed try: a display that has only just come back may
+    /// not take a mode yet. With `json`, standard output is left for the JSON, so how the
+    /// wait ended goes to standard error with the rest.
+    @discardableResult
     static func finishRestore(
-        _ pending: ModeSwitcher.PendingRestore, with switcher: ModeSwitcher, on display: Display, in context: CommandContext
-    ) throws {
+        _ pending: ModeSwitcher.PendingRestore, with switcher: ModeSwitcher, on display: Display, in context: CommandContext,
+        json: Bool = false
+    ) throws -> DisplayMode? {
+        let say = json ? context.writeError : context.write
         let waitingMessage = pending.resolveDisplay(in: context.service.displays()) != nil
             ? "\(pending.displayName) could not restore the previous mode yet. Waiting for it to accept the change…"
             : "\(pending.displayName) went away. Waiting for it to come back to restore the previous mode…"
@@ -207,8 +268,11 @@ struct SetCommand: ParsableCommand, ContextCommand {
             }
         }
         let returned = pending.resolveDisplay(in: context.service.displays())
+        func mode(_ modeID: Int32) -> DisplayMode? {
+            (returned ?? display).modes.first { $0.modeID == modeID }
+        }
         func describe(_ modeID: Int32) -> String {
-            (returned ?? display).modes.first { $0.modeID == modeID }.map(Output.describe) ?? "mode \(modeID)"
+            mode(modeID).map(Output.describe) ?? "mode \(modeID)"
         }
         func isPrevious(_ modeID: Int32) -> Bool {
             if let fingerprint = pending.previousMode, let mode = returned?.modes.first(where: { $0.modeID == modeID }) {
@@ -216,20 +280,25 @@ struct SetCommand: ParsableCommand, ContextCommand {
             }
             return modeID == pending.modeID
         }
+        var back: DisplayMode?
         switch progress {
         case .restored(let modeID):
+            back = mode(modeID)
             let which = isPrevious(modeID) ? "the previous mode" : "its default mode"
-            context.write("\(pending.displayName) is back. Restored \(which): \(describe(modeID)).")
+            say("\(pending.displayName) is back. Restored \(which): \(describe(modeID)).")
         case .leftAlone(let current) where isPrevious(current):
-            context.write("\(pending.displayName) is back with the previous mode: \(describe(current)).")
+            back = mode(current)
+            say("\(pending.displayName) is back with the previous mode: \(describe(current)).")
         case .leftAlone(let current):
-            context.write("\(pending.displayName) is back with \(describe(current)), so it was left as it is.")
+            back = mode(current)
+            say("\(pending.displayName) is back with \(describe(current)), so it was left as it is.")
         case .waiting:
             break
         }
         // A mode that never showed is an error whether or not the display went away, once
         // the display's state is told.
         if let failure = pending.failure { throw failure }
+        return back
     }
 
     /// Numeric display and mode IDs may change on reconnect. Do not hand out a stale
@@ -246,9 +315,11 @@ struct SetCommand: ParsableCommand, ContextCommand {
     }
 
     /// Reads a complete answer within one deadline. Reading bytes from the polled file
-    /// descriptor avoids readLine() blocking past the deadline after partial input.
+    /// descriptor avoids readLine() blocking past the deadline after partial input. The
+    /// prompt goes to `output`.
     static func askToKeep(
-        seconds: Int = 15, input: Int32 = STDIN_FILENO, isTerminal: Bool? = nil, interrupts: Interrupts = .process
+        seconds: Int = 15, input: Int32 = STDIN_FILENO, output: Int32 = STDOUT_FILENO, isTerminal: Bool? = nil,
+        interrupts: Interrupts = .process
     ) -> ModeSwitcher.Decision {
         guard isTerminal ?? (isatty(input) != 0) else {
             return .revert
@@ -258,8 +329,8 @@ struct SetCommand: ParsableCommand, ContextCommand {
         let originalFlags = fcntl(input, F_GETFL)
         guard originalFlags >= 0, fcntl(input, F_SETFL, originalFlags | O_NONBLOCK) == 0 else { return .revert }
         defer { _ = fcntl(input, F_SETFL, originalFlags) }
-        let prompt = "Keep this display mode? Type y and press Return within \(seconds) seconds; anything else reverts: "
-        FileHandle.standardOutput.write(Data(prompt.utf8))
+        let prompt = FileHandle(fileDescriptor: output, closeOnDealloc: false)
+        prompt.write(Data("Keep this display mode? Type y and press Return within \(seconds) seconds; anything else reverts: ".utf8))
         // Ctrl-C is "no": the trial must be undone, which ending the process would not do.
         let deadline = ContinuousClock.now + .seconds(seconds)
         var bytes: [UInt8] = []
@@ -279,7 +350,203 @@ struct SetCommand: ParsableCommand, ContextCommand {
             guard bytes.count < 128 else { break }
             bytes.append(byte)
         }
-        print("")
+        prompt.write(Data("\n".utf8))
         return .revert
+    }
+}
+
+// MARK: - Asking a person
+
+extension SetCommand {
+    /// Who keeps or reverts a hidden mode on trial.
+    enum Asker {
+        /// The app's dialog on the display being tried, which counts down `trialSeconds`.
+        case app(AgentChannelClient, trialSeconds: Int)
+        /// The prompt in this terminal.
+        case terminal
+    }
+
+    /// How a hidden mode on trial was answered.
+    struct Answer {
+        var decision: ModeSwitcher.Decision
+        /// "person" when a person kept the mode.
+        var keptBy: String?
+        /// Why the mode was reverted, in words: "no answer in 15 s".
+        var reason: String?
+        /// Whether the text output tells the reason: what happened at the display is news
+        /// to whoever runs the command, an answer typed here is not.
+        var isToldInText = true
+        /// Why History says the mode was put back. The terminal can't tell a "no" from no
+        /// answer; the app's dialog can.
+        var revertReason: HistoryEntry.RevertReason = .unspecified
+
+        /// A kept hidden mode lasts until logout at most, so that is how long it is kept.
+        static let keptByPerson = Answer(decision: .keepForSession, keptBy: "person")
+
+        static func reverted(_ reason: String, because revertReason: HistoryEntry.RevertReason = .unspecified) -> Answer {
+            Answer(decision: .revert, reason: reason, revertReason: revertReason)
+        }
+    }
+
+    /// Finds who can keep a hidden mode, before anything changes: the app when it says
+    /// hello, else the terminal. Throws when there is neither.
+    static func asker(in context: CommandContext) throws -> Asker {
+        var appProblem: String?
+        if let app = context.app {
+            switch app.checkApp() {
+            case .ready(let ready): return .app(app, trialSeconds: ready.trialSeconds)
+            case .notRunning: break
+            case .unavailable(let reason): appProblem = reason
+            case .refused(let reason):
+                // The person's choice in Resolute holds in a terminal too.
+                throw ResoluteError.usage("\(reason) No display settings changed.")
+            }
+        }
+        guard context.canConfirmHiddenMode else {
+            throw ResoluteError.usage(appProblem.map {
+                "A person must keep a hidden mode, but the Resolute app can't ask right now: \($0) "
+                    + "Run the command in an interactive terminal instead. No display settings changed."
+            } ?? "A person must keep a hidden mode: open the Resolute app, which asks on the display, "
+                + "or run the command in an interactive terminal. No display settings changed.")
+        }
+        if let appProblem {
+            context.writeError("The Resolute app can't ask right now: \(appProblem) Asking here instead.")
+        }
+        return .terminal
+    }
+
+    static func ask(_ asker: Asker, about request: ConfirmHiddenModeRequest?, in context: CommandContext) -> Answer {
+        guard case .app(let app, _) = asker, let request else { return askInTerminal(context) }
+        return askApp(app, request, in: context)
+    }
+
+    static func askInTerminal(_ context: CommandContext) -> Answer {
+        switch context.confirmHiddenMode() {
+        case .keep, .keepForSession:
+            return .keptByPerson
+        case .revert:
+            var answer = Answer.reverted("not kept")
+            answer.isToldInText = false
+            return answer
+        }
+    }
+
+    /// Asks the app to show its dialog on the display, then waits for a person's answer, the
+    /// end of the trial or Ctrl-C, whichever comes first. Anything but a person's Keep
+    /// reverts; the app is told when its dialog is no longer needed.
+    static func askApp(_ app: AgentChannelClient, _ request: ConfirmHiddenModeRequest, in context: CommandContext) -> Answer {
+        let noAnswer = "no answer in \(request.trialSeconds) s"
+        // Ctrl-C during the switch: the mode goes back without a dialog.
+        guard context.interrupts.wait(0) != .interrupted else { return .reverted("interrupted") }
+        let pending: PendingAnswer
+        do {
+            pending = try app.ask(request)
+        } catch {
+            // The app quit after it said hello.
+            guard context.canConfirmHiddenMode else {
+                return .reverted("the Resolute app could not ask: \(error.localizedDescription)")
+            }
+            context.writeError("The Resolute app can't ask right now: \(error.localizedDescription) Asking here instead.")
+            return askInTerminal(context)
+        }
+        defer { pending.close() }
+        context.writeError("Waiting up to \(request.trialSeconds) s for someone at the display to keep it…")
+        let deadline = ContinuousClock.now + .seconds(request.trialSeconds) + app.answerGrace
+        while true {
+            let left = deadline - ContinuousClock.now
+            guard left > .zero else {
+                pending.dismiss(.stoppedWaiting)
+                return .reverted(noAnswer, because: .noAnswer)
+            }
+            let seconds = Double(left.components.seconds) + Double(left.components.attoseconds) / 1e18
+            switch context.interrupts.wait(seconds, orFor: pending.fileDescriptor) {
+            case .interrupted:
+                pending.dismiss(.interrupted)
+                return .reverted("interrupted")
+            case .timedOut:
+                continue
+            case .input:
+                switch pending.readAnswer() {
+                case .waiting:
+                    continue
+                case .answered(let response) where response.answer == .keep && response.by == .person:
+                    return .keptByPerson
+                case .answered(let response) where response.by == .person:
+                    return .reverted(response.reason ?? "reverted by person", because: .declined)
+                case .answered(let response):
+                    // The dialog's own countdown ran out, or the app reverted for a reason of its own.
+                    let timedOut = response.reason == nil || response.reason == noAnswer
+                    return .reverted(response.reason ?? noAnswer, because: timedOut ? .noAnswer : .unspecified)
+                case .failed(.refused(let problem)):
+                    return .reverted("the Resolute app turned the request down: \(problem.message)")
+                case .failed(.closedWithoutAnswer):
+                    return .reverted("the Resolute app closed without an answer")
+                case .failed:
+                    // Such as a keep that does not come from a person.
+                    return .reverted("the Resolute app's answer could not be read")
+                }
+            }
+        }
+    }
+}
+
+// MARK: - JSON
+
+extension SetCommand {
+    /// What `set --json` prints. Every key is always present, null when it does not apply,
+    /// as docs/json.md describes.
+    struct Summary: Encodable {
+        enum Result: String, Encodable {
+            /// Switched without a trial, or already in use.
+            case applied
+            /// A person kept the hidden mode on trial.
+            case kept
+            /// The previous mode is back.
+            case reverted
+        }
+
+        var display: String
+        var mode: String
+        var hidden: Bool
+        /// Nil on a dry run, which changes nothing.
+        var result: Result?
+        var keptBy: String?
+        var until: String?
+        var reason: String?
+        var restored: String?
+
+        init(display: Display, mode: DisplayMode) {
+            self.display = display.name
+            self.mode = Self.size(of: mode)
+            hidden = mode.origin == .hidden
+        }
+
+        /// "2880x1620", as `resolute set` takes it.
+        static func size(of mode: DisplayMode) -> String {
+            "\(mode.width)x\(mode.height)"
+        }
+
+        /// Records a trial that was undone, leaving the display in `restored`.
+        mutating func revert(_ answer: Answer?, restored: DisplayMode?) {
+            result = .reverted
+            reason = answer?.reason
+            self.restored = restored.map(Self.size(of:))
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case display, mode, hidden, result, keptBy, until, reason, restored
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(display, forKey: .display)
+            try container.encode(mode, forKey: .mode)
+            try container.encode(hidden, forKey: .hidden)
+            try container.encode(result, forKey: .result)
+            try container.encode(keptBy, forKey: .keptBy)
+            try container.encode(until, forKey: .until)
+            try container.encode(reason, forKey: .reason)
+            try container.encode(restored, forKey: .restored)
+        }
     }
 }

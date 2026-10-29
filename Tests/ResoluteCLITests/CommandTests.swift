@@ -16,6 +16,21 @@ import Testing
 }
 
 @Suite struct DisplaysJSONTests {
+    /// What the app's agent instructions say: the commands they list take `--json`, all but
+    /// `mirror`, which turns it away before changing anything.
+    @Test func theCommandsTheAgentInstructionsListTakeJSONButMirror() {
+        let taking = [
+            ["displays", "--json"], ["modes", "-d", "main", "--json"], ["set", "1496x967", "-d", "main", "--json"],
+            ["preset", "list", "--json"], ["preset", "apply", "Coding", "--json"], ["history", "--json"],
+        ]
+        for arguments in taking {
+            #expect(throws: Never.self) { _ = try ResoluteCommand.parseAsRoot(arguments) }
+        }
+        for arguments in [["mirror", "on", "--json"], ["mirror", "off", "--json"]] {
+            #expect(throws: (any Error).self) { _ = try ResoluteCommand.parseAsRoot(arguments) }
+        }
+    }
+
     @Test func givesVendorAndProductIDsInHexLikeEveryOtherCommand() async throws {
         let output = try await resolute(["displays", "--json"]).output
         let displays = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]]
@@ -91,12 +106,15 @@ import Testing
         #expect(transcript.output.hasSuffix("(until you log out)"))
     }
 
-    @Test func triesAHiddenModeAndSavesItWhenConfirmed() async throws {
+    /// macOS may not bring back a mode it does not list, so a kept hidden mode is never
+    /// saved: it lasts until logout.
+    @Test func triesAHiddenModeAndKeepsItUntilLogoutWhenConfirmed() async throws {
         let service = FakeDisplays([Sample.monitor])
-        try await resolute(["set", "--mode-id", "90", "--allow-hidden", "-d", "dell"], service: service, decision: .keep)
-        #expect(service.changes == [
-            .init(displayID: 2, modeID: 90, scope: .session), .init(displayID: 2, modeID: 90, scope: .permanent),
-        ])
+        let transcript = try await resolute(
+            ["set", "--mode-id", "90", "--allow-hidden", "-d", "dell"], service: service, decision: .keep
+        )
+        #expect(service.changes == [.init(displayID: 2, modeID: 90, scope: .session)])
+        #expect(transcript.output.hasSuffix("(until you log out)"))
     }
 
     @Test func revertsAHiddenModeThatIsNotConfirmed() async throws {
@@ -182,7 +200,7 @@ import Testing
             ["set", "--mode-id", "90", "--allow-hidden", "-d", "dell"], service: service, decision: .keep
         )
         #expect(transcript.errors.isEmpty)
-        #expect(transcript.output == "DELL P2419H: 1920 × 1080 @ 75 Hz, mode 90, hidden")
+        #expect(transcript.output == "DELL P2419H: 1920 × 1080 @ 75 Hz, mode 90, hidden (until you log out)")
     }
 
     @Test func reportsAHiddenModeTheDisplayIgnored() async {
@@ -406,6 +424,30 @@ import Testing
 }
 
 @Suite struct UnknownCommandTests {
+    @Test func pointsPresetCommandsAtPreset() {
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["preset", "aply", "Coding"])
+            == "“aply” is not a preset command. Did you mean “resolute preset apply”?")
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["preset", "Coding"])
+            == "“Coding” is not a preset command. To apply a preset by that name, run “resolute preset apply Coding”.")
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["apply", "Coding"])
+            == "“apply” is not a resolute command. Did you mean “resolute preset apply”?")
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["list"])
+            == "“list” is not a resolute command. Did you mean “resolute overrides list”?")
+        for arguments in [["preset"], ["preset", "--json"], ["preset", "list"], ["preset", "apply", "Coding"], ["help", "preset"]] {
+            #expect(ResoluteCommand.unknownCommandMessage(for: arguments) == nil, "\(arguments)")
+        }
+    }
+
+    @Test func pointsMistypedScalingCommandsAtTheRightOne() {
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["scaling", "onn"])
+            == "“onn” is not a scaling command. Did you mean “resolute scaling on”?")
+        #expect(ResoluteCommand.unknownCommandMessage(for: ["scaling", "sharp"])
+            == "“sharp” is not a scaling command. The scaling commands are plan, on, off and status.")
+        for arguments in [["scaling"], ["scaling", "-d", "ASUS"], ["scaling", "status", "--json"], ["scaling", "on", "--switch"]] {
+            #expect(ResoluteCommand.unknownCommandMessage(for: arguments) == nil, "\(arguments)")
+        }
+    }
+
     @Test func suggestsTheCommandThatWasMeant() {
         #expect(ResoluteCommand.unknownCommandMessage(for: ["mode"]) == "“mode” is not a resolute command. Did you mean “resolute modes”?")
         #expect(ResoluteCommand.unknownCommandMessage(for: ["version"])
@@ -413,7 +455,7 @@ import Testing
         #expect(ResoluteCommand.unknownCommandMessage(for: ["1496x967"])
             == "“1496x967” is not a resolute command. To switch to that resolution, run “resolute set 1496x967”.")
         #expect(ResoluteCommand.unknownCommandMessage(for: ["frobnicate"])
-            == "“frobnicate” is not a resolute command. The commands are displays, modes, set, mirror, overrides and doctor.")
+            == "“frobnicate” is not a resolute command. The commands are displays, modes, set, mirror, overrides, preset, scaling, history and doctor.")
     }
 
     @Test func pointsOverridesCommandsAtOverrides() {

@@ -869,10 +869,14 @@ final class CountingRunner: CommandRunning, @unchecked Sendable {
         defer { try? FileManager.default.removeItem(at: root) }
         try install(DisplayOverride(key: OverrideKey(display: first), resolutions: [.standard(width: 2560, height: 1440)]), under: root)
         let model = makeModel(root: root, displays: StubDisplays([first]))
-        let plain = "macOS goes back to the display's default resolutions after you reconnect it or restart. A backup is kept."
-        #expect(model.removalMessage == plain)
+        #expect(model.removalTitle == "Remove the custom resolutions for First?")
+        #expect(model.removalMessage == "The display goes back to the modes macOS gives it after you reconnect it. A backup is kept.")
         #expect(model.add(.standard(width: 1920, height: 1080)) == nil)
-        #expect(model.removalMessage == plain + " Your unsaved changes are discarded.")
+        #expect(model.removalMessage
+            == "The display goes back to the modes macOS gives it after you reconnect it. Your unsaved change is discarded too. A backup is kept.")
+        #expect(model.add(.hiDPI(width: 1280, height: 720, flags: .standard)) == nil)
+        #expect(model.removalMessage
+            == "The display goes back to the modes macOS gives it after you reconnect it. Your 2 unsaved changes are discarded too. A backup is kept.")
     }
 
     /// A backup of a file Resolute can't edit can still be put back, as it is.
