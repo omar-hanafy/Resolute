@@ -67,6 +67,24 @@ import Testing
         #expect(errors.titles.last == "The change can’t be undone")
     }
 
+    /// The menu or panel showed the DELL, and another monitor took its display ID before the
+    /// choice arrived: the other monitor is left alone, rather than switched and saved.
+    @Test func leavesAloneAMonitorThatTookTheIDOfTheOneChosenFor() throws {
+        let mode = try listedMode(dell)
+        var other = dell
+        other.name = "LG UltraFine"
+        other.productID = 0x7777
+        other.serialNumber = 0x9999
+        service.set([FakeDisplayService.builtIn, other])
+        model.apply(mode, to: dell, from: .dock)
+        model.apply(modeID: mode.modeID, to: dell.id, needsConfirmation: false, from: .menu, chosenFor: dell)
+        #expect(service.changes.isEmpty)
+        #expect(model.historyEntries.isEmpty)
+        // Chosen for the monitor there now, it switches.
+        model.apply(mode, to: other, from: .panel)
+        #expect(service.changes == [FakeDisplayService.Change(displayID: other.id, modeID: mode.modeID, scope: .permanent)])
+    }
+
     @Test func readsWhatTheCommandLineAdded() throws {
         let mode = try listedMode(dell)
         let terminal = HistoryRecorder(store: HistoryStore(locations: model.support), source: .agent(name: "Claude Code", app: "Terminal"))

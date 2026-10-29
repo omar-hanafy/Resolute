@@ -382,6 +382,30 @@ final class CoordinatorLog {
         #expect(displays.changes.last == Change(displayID: 2, modeID: 1, scope: .session))
     }
 
+    /// A killed command tried mode 3 while the app's revert of 90 waited for the monitor to
+    /// take mode 1: putting the command's 90 back comes first, so the app's revert then finds
+    /// its trial mode and still puts 1 back, rather than leaving the monitor in 90.
+    @Test func finishesTheAppsWaitingRevertAfterAKilledCommandsOne() throws {
+        let log = CoordinatorLog()
+        coordinator.onWaitEnded = { log.note($1, of: $0) }
+        tryModeThatMakesTheMonitorGoAway()
+        displays.refused = [1]
+        displays.comeBack(2)
+        coordinator.displaysDidChange()
+        #expect(coordinator.pendingRestores == [pending])
+        let before = try #require(displays.displays().first { $0.id == 2 })
+        try displays.apply(modeID: 3, to: 2, scope: .session)
+        displays.refused = []
+        let restore = try #require(ModeSwitcher.restore(undoing: 3, on: before, backTo: 90))
+
+        #expect(coordinator.putBack(restore) == .restored(to: 90))
+        #expect(displays.changes.suffix(2) == [
+            Change(displayID: 2, modeID: 90, scope: .session), Change(displayID: 2, modeID: 1, scope: .session),
+        ])
+        #expect(coordinator.pendingRestores.isEmpty)
+        #expect(log.endings == ["DELL P2419H back"])
+    }
+
     /// Undoing both trials means going back to the mode from before the first one.
     @Test func goesBackToTheModeFromBeforeBothTrialsWhenTheDisplayGoesAwayAgain() {
         tryModeThatMakesTheMonitorGoAway()

@@ -233,9 +233,13 @@ final class AgentRequests {
             guard let model else { return }
             model.refresh()
             let reference = request.display
-            guard let display = model.displays.first(where: { $0.id == reference.id }) ?? model.lastSeenDisplays[reference.id],
-                  display.vendorID == reference.vendorID, display.productID == reference.productID,
-                  display.serialNumber == reference.serialNumber,
+            func isOnTrial(_ display: Display) -> Bool {
+                display.id == reference.id && display.vendorID == reference.vendorID
+                    && display.productID == reference.productID && display.serialNumber == reference.serialNumber
+            }
+            // Another display may have the ID of the one on trial, which is away: its revert
+            // then waits for it under the ID it had, as a trial's does.
+            guard let display = model.displays.first(where: isOnTrial) ?? model.lastSeenDisplays.last(where: isOnTrial),
                   let trialMode = display.modes.first(where: { $0.modeID == request.modeID }),
                   let restore = ModeSwitcher.restore(undoing: request.modeID, on: display, backTo: request.previousModeID)
             else {

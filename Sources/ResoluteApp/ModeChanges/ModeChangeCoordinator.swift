@@ -164,8 +164,6 @@ final class ModeChangeCoordinator {
     @discardableResult
     func putBack(_ restore: ModeSwitcher.PendingRestore) -> ModeSwitcher.RestoreProgress? {
         guard switchesUnderWay == 0 else { return nil }
-        // A revert still waiting for this display goes first, as it does before a switch.
-        if waiting[restore.displayID] != nil { attempt(restore.displayID) }
         let progress: ModeSwitcher.RestoreProgress
         do {
             progress = try ModeSwitcher(service: service).finish(restore)
@@ -173,7 +171,14 @@ final class ModeChangeCoordinator {
             // The display is here but refused both modes: tried again, as a trial's revert is.
             progress = .waiting
         }
-        if progress == .waiting { settle(.restorePending(restore), of: restore.displayID) }
+        if progress == .waiting {
+            // Joined with a revert still waiting for the display, as a new trial's is.
+            settle(.restorePending(restore), of: restore.displayID)
+        } else if waiting[restore.displayID] != nil {
+            // A revert still waiting for the display goes after, unlike before a switch: the
+            // command's trial began from the earlier trial's mode, which is back only now.
+            attempt(restore.displayID)
+        }
         return progress
     }
 

@@ -29,9 +29,10 @@ final class AppModel {
     /// order of the panel's cards and the window's sidebar. Read again when the screens
     /// change and after every switch.
     private(set) var displays: [Display] = []
-    /// Every display read since launch, as last read, by display ID: a revert can be set up
-    /// for one that has gone dark, which a killed command's trial leaves to the app.
-    @ObservationIgnored private(set) var lastSeenDisplays: [CGDirectDisplayID: Display] = [:]
+    /// Every display read since launch, as last read: a revert can be set up for one that has
+    /// gone dark, which a killed command's trial leaves to the app. One per display ID and
+    /// hardware, since another display can take the ID of one that is away.
+    @ObservationIgnored private(set) var lastSeenDisplays: [Display] = []
     /// One per override key: the connected displays, then the displays that are not
     /// connected but have an override file.
     private(set) var overrideTargets: [OverrideTarget] = []
@@ -137,7 +138,11 @@ final class AppModel {
     /// values that did not change are left alone, so nothing observing them redraws.
     func refresh() {
         let fresh = Self.ordered(service.displays())
-        for display in fresh { lastSeenDisplays[display.id] = display }
+        for display in fresh {
+            let identity = ModeSwitcher.DisplayIdentity(display)
+            lastSeenDisplays.removeAll { $0.id == display.id && ModeSwitcher.DisplayIdentity($0) == identity }
+            lastSeenDisplays.append(display)
+        }
         if fresh != displays {
             displays = fresh
             // A display's ID can name another display after a reconnect.
@@ -280,16 +285,28 @@ final class AppModel {
     /// and kept only when the person keeps it before the countdown ends. History records how
     /// the switch ended.
     func apply(_ mode: DisplayMode, to display: Display, from source: HistoryEntry.Source = .panel) {
-        apply(modeID: mode.modeID, to: display.id, needsConfirmation: mode.origin == .hidden, from: source)
+        apply(modeID: mode.modeID, to: display.id, needsConfirmation: mode.origin == .hidden, from: source, chosenFor: display)
     }
 
-    func apply(modeID: Int32, to displayID: CGDirectDisplayID, needsConfirmation: Bool, from source: HistoryEntry.Source = .panel) {
+    /// `chosenFor` is the display as the menu or panel showed it, when known: another display
+    /// that took its ID since, after a reconnect, is left alone.
+    func apply(
+        modeID: Int32, to displayID: CGDirectDisplayID, needsConfirmation: Bool, from source: HistoryEntry.Source = .panel,
+        chosenFor shown: Display? = nil
+    ) {
         guard !isTrialHeldByAgentRequest(needsConfirmation) else { return }
         // As it is now, before the switch, which is how History records a change: a menu
         // reads the displays when it opens, and the display behind the ID may have changed since.
-        guard let before = service.displays().first(where: { $0.id == displayID }),
-              let mode = before.modes.first(where: { $0.modeID == modeID })
-        else {
+        let current = service.displays().first { $0.id == displayID }
+        if let shown, let current, ModeSwitcher.DisplayIdentity(current) != ModeSwitcher.DisplayIdentity(shown) {
+            ResoluteLog.modes.notice("""
+                Ignored mode \(modeID) chosen for \(shown.name, privacy: .public): \
+                \(current.name, privacy: .public) has its display ID now
+                """)
+            refresh()
+            return
+        }
+        guard let before = current, let mode = before.modes.first(where: { $0.modeID == modeID }) else {
             modeChanges.apply(modeID: modeID, to: displayID, needsConfirmation: needsConfirmation)
             refresh()
             return

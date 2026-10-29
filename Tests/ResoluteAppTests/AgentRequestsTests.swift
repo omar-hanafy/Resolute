@@ -478,6 +478,46 @@ final class FakeTrialScreen {
         #expect(entry.outcome == .reverted(.displayWentDark))
     }
 
+    /// Another monitor took the ID of the one on trial while it was dark: the revert waits for
+    /// the one on trial, found by its serial number under its new ID once it is back, and
+    /// leaves the other monitor alone.
+    @Test func waitsForTheDisplayOnTrialWhenAnotherTakesItsID() throws {
+        let service = FakeDisplayService()
+        let scratch = ScratchDefaults()
+        let model = AppModelTests.makeModel(
+            service: service, preferences: Preferences(defaults: scratch.defaults),
+            overridesRoot: FileManager.default.temporaryDirectory.appending(path: "ResoluteAgentRestore-\(UUID().uuidString)")
+        )
+        let dell = FakeDisplayService.dell
+        let previous = try #require(dell.currentModeID)
+        let hidden = try #require(dell.modes.first { $0.origin == .hidden })
+        let request = ConfirmHiddenModeRequest(
+            display: dell, trying: hidden, previous: dell.currentMode, trialSeconds: 8,
+            requester: Requester(agent: "Claude Code", app: "Terminal")
+        )
+        try service.apply(modeID: hidden.modeID, to: dell.id, scope: .session)
+        model.refresh()
+        var inTrial = try #require(service.displays().first { $0.id == dell.id })
+        service.set([FakeDisplayService.builtIn])
+        model.displaysDidChange()
+        var other = FakeDisplayService.dell
+        other.serialNumber = 0x1234
+        service.set([FakeDisplayService.builtIn, other])
+        model.displaysDidChange()
+        let switches = service.changes.count
+
+        AgentRequests.restorePreviousMode(of: request, in: model)
+        #expect(model.modeChanges.pendingRestores.map(\.displayID) == [dell.id])
+        #expect(service.changes.count == switches)
+
+        inTrial.id = 7
+        service.set([FakeDisplayService.builtIn, other, inTrial])
+        model.displaysDidChange()
+        #expect(service.changes.last == FakeDisplayService.Change(displayID: 7, modeID: previous, scope: .session))
+        #expect(model.modeChanges.pendingRestores.isEmpty)
+        #expect(model.historyEntries.first?.outcome == .reverted(.displayWentDark))
+    }
+
     /// A display changed since the command switched it keeps what was chosen, and History
     /// says the trial ended with the display changed, as the command would have recorded.
     @Test func leavesADisplayChangedSinceAndSaysSo() throws {

@@ -8,6 +8,8 @@ import ResoluteKit
 final class StatusMenuController: NSObject, NSMenuDelegate {
     let menu = NSMenu()
     private let model: AppModel
+    /// The displays the menu was last built for: what its choices were chosen for.
+    private var shownDisplays: [Display] = []
 
     init(model: AppModel) {
         self.model = model
@@ -30,8 +32,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         model.refresh()
+        shownDisplays = model.displays
         let nodes = Self.nodes(
-            displays: model.displays,
+            displays: shownDisplays,
             preferences: model.preferences,
             showsDetails: NSEvent.modifierFlags.contains(.option)
         )
@@ -51,7 +54,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         guard !model.modeChanges.isChangingMode else { return }
         switch action {
         case .applyMode(let displayID, let modeID, let needsConfirmation):
-            model.apply(modeID: modeID, to: displayID, needsConfirmation: needsConfirmation, from: .menu)
+            model.apply(
+                modeID: modeID, to: displayID, needsConfirmation: needsConfirmation, from: .menu,
+                chosenFor: shownDisplays.first { $0.id == displayID }
+            )
         case .setMirroring(let enabled):
             model.setMirroring(enabled, from: .menu)
         case .openCustomResolutions(let displayID):

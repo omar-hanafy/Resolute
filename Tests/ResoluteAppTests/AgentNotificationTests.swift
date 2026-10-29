@@ -292,11 +292,29 @@ import Testing
         withExtendedLifetime(notifier) {}
     }
 
+    /// A notification's Undo is taken up at the run loop's next turn, which comes while
+    /// main-actor work is under way too, rather than as main-actor work: an alert it opened as
+    /// main-actor work would hold up all other such work until closed, such as a Keep from a
+    /// `resolute` command's dialog on its way to the command.
+    @Test func takesUpANotificationsUndoAtTheRunLoopsNextTurn() {
+        let undo = UndoTakenUp()
+        SystemNotificationPoster.takeUp { undo.ran = true }
+        #expect(!undo.ran)
+        // This test is main-actor work, which only the run loop's way gets past meanwhile.
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        #expect(undo.ran)
+    }
+
     @Test func saysWhenTheChangeIsGoneFromHistory() {
         poster.onUndo?(UUID())
         #expect(errors.titles == ["The change can’t be undone"])
         #expect(service.changes.isEmpty)
     }
+}
+
+@MainActor
+private final class UndoTakenUp {
+    var ran = false
 }
 
 /// Notification Center as the notifier sees it, without reaching it.

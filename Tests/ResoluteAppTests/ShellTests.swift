@@ -533,6 +533,18 @@ struct PanelFixtureView: View {
         #expect(service.mirroringRequests == [true])
     }
 
+    /// A choice made in the menu for the DELL, after another monitor took its display ID.
+    @Test func sendsAChoiceOnlyToTheDisplayItWasMadeFor() throws {
+        menu.menuNeedsUpdate(menu.menu)
+        let mode = try #require(FakeDisplayService.dell.modes.first { $0.width == 1600 })
+        var other = FakeDisplayService.dell
+        other.productID = 0x7777
+        other.serialNumber = 0x9999
+        service.set([FakeDisplayService.builtIn, other])
+        menu.perform(.applyMode(displayID: FakeDisplayService.dellID, modeID: mode.modeID, needsConfirmation: false))
+        #expect(service.changes.isEmpty)
+    }
+
     @Test func dumpsTheSameMenuForDiagnostics() {
         let preferences = Preferences(defaults: UserDefaults(suiteName: "com.omarhanafy.Resolute.gallery") ?? .standard)
         let nodes = StatusMenuController.nodes(service: service, preferences: preferences, showsDetails: false)

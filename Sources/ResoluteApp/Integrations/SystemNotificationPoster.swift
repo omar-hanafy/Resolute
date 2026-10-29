@@ -70,6 +70,13 @@ extension SystemNotificationPoster: UNUserNotificationCenterDelegate {
         guard response.actionIdentifier == Self.undoAction,
               let id = UUID(uuidString: response.notification.request.identifier)
         else { return }
-        await MainActor.run { onUndo?(id) }
+        Self.takeUp { [weak self] in self?.onUndo?(id) }
+    }
+
+    /// Runs an Undo at the main run loop's next turn rather than inside main-actor work: an
+    /// alert it opens there would hold up all other main-actor work until closed, such as the
+    /// Keep chosen in the dialog of a `resolute` command, whose wait could run out meanwhile.
+    nonisolated static func takeUp(_ undo: @escaping @MainActor @Sendable () -> Void) {
+        MainRunLoop.perform(undo)
     }
 }
